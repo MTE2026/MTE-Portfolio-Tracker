@@ -509,6 +509,7 @@ async function syncFromServer(){
         });
       });
       if(data.locked) Object.assign(S.lockedMonths, data.locked);
+      if(data.blends && Object.keys(data.blends).length) S.blends = data.blends;
       // Always merge SEED_MAY29 as base so mobile always has anchor prices
       S.monthEndPrices = {...SEED_MAY29, ...S.monthEndPrices};
       if(data.monthEndPrices && Object.keys(data.monthEndPrices).length){
@@ -530,8 +531,20 @@ function save() {
   localStorage.setItem('mte_locked', JSON.stringify(S.lockedMonths));
   localStorage.setItem('mte_yields', JSON.stringify(S.yields));
   localStorage.setItem('mte_mep', JSON.stringify(S.monthEndPrices));
+  // Push blends to server every time they change
+  pushBlendsToServer();
   const b = document.getElementById('save-banner');
   b.style.display='flex'; setTimeout(()=>b.style.display='none',2500);
+}
+
+async function pushBlendsToServer(){
+  try {
+    const params = new URLSearchParams({
+      action: 'saveBlends',
+      blends: JSON.stringify(S.blends)
+    });
+    await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
+  } catch(e){}
 }
 
 async function pushToServer(){
@@ -781,20 +794,16 @@ async function syncHistoricalToServer(){
   const btn = document.getElementById('sync-btn');
   btn.textContent = '⏳ Syncing…'; btn.disabled = true;
   try {
-    // Send all returns in one call via saveReturnsData
     const params = new URLSearchParams({
       action: 'saveReturnsData',
       returns: JSON.stringify(S.returns),
       locked: JSON.stringify(S.lockedMonths),
-      mep: JSON.stringify(S.monthEndPrices)
+      mep: JSON.stringify(S.monthEndPrices),
+      blends: JSON.stringify(S.blends)
     });
     const r = await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
     const data = await r.json();
-    if(data && data.success){
-      btn.textContent = '✓ Synced';
-    } else {
-      btn.textContent = '✓ Done';
-    }
+    btn.textContent = data && data.success ? '✓ Synced' : '✓ Done';
   } catch(e){
     btn.textContent = '✓ Done';
   }
