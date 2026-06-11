@@ -563,7 +563,7 @@ function allTickers() {
 
 // Parse Apps Script fetchMultipleQuotes response into our price format
 function parseASQuote(ticker, q) {
-  if (!q || !q.success) return {price:0,prev:0,weekOpen:0,monthOpen:0};
+  if (!q || !q.success) return {price:0,prev:0,weekOpen:0,monthOpen:0,dailyReturn:null,wtdReturn:null,monthlyReturn:null};
   const price = q.price || 0;
   const prev = q.prevClose || price;
   let weekOpen = price, monthOpen = price;
@@ -579,15 +579,19 @@ function parseASQuote(ticker, q) {
       if(d2>=monthStart) monthOpen=closes[i-1]||monthOpen;
     }
   } else {
-    // Back-calculate from returns — ensure non-zero
     if (q.wtdReturn != null && q.wtdReturn !== 0 && price > 0)
       weekOpen = price / (1 + q.wtdReturn/100);
     if (q.monthlyReturn != null && q.monthlyReturn !== 0 && price > 0)
       monthOpen = price / (1 + q.monthlyReturn/100);
-    // If monthlyReturn is 0 or null, use prev close as approximation
     if (monthOpen === price && prev > 0) monthOpen = prev;
   }
-  return {price, prev, weekOpen, monthOpen};
+  // Store AS-provided returns directly — more accurate than recalculating
+  return {
+    price, prev, weekOpen, monthOpen,
+    dailyReturn: q.dailyReturn,
+    wtdReturn: q.wtdReturn,
+    monthlyReturn: q.monthlyReturn
+  };
 }
 
 async function loadPrices() {
@@ -669,9 +673,9 @@ const pct = (v,bold) => v!=null&&!isNaN(v) ? (v>=0?'+':'')+v.toFixed(2)+'%' : '�
 const cls = v => v>0.005?'pos':v<-0.005?'neg':'neu';
 const pf = v => parseFloat((v||'0').toString().replace('%',''))||0;
 
-function dRet(t){ const p=S.prices[t]; return p&&p.prev?(p.price-p.prev)/p.prev*100:0; }
-function wRet(t){ const p=S.prices[t]; return p&&p.weekOpen?(p.price-p.weekOpen)/p.weekOpen*100:0; }
-function mRet(t){ const p=S.prices[t]; return p&&p.monthOpen?(p.price-p.monthOpen)/p.monthOpen*100:0; }
+function dRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.dailyReturn!=null) return p.dailyReturn; return p.prev?(p.price-p.prev)/p.prev*100:0; }
+function wRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.wtdReturn!=null) return p.wtdReturn; return p.weekOpen&&p.weekOpen!==p.price?(p.price-p.weekOpen)/p.weekOpen*100:0; }
+function mRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.monthlyReturn!=null) return p.monthlyReturn; return p.monthOpen&&p.monthOpen!==p.price?(p.price-p.monthOpen)/p.monthOpen*100:0; }
 
 // Use raw weights / 100 so that a 115% model correctly amplifies returns
 // e.g. if weights sum to 115, each position contributes weight/100 (not weight/115)
