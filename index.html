@@ -672,8 +672,13 @@ async function fetchPriceDirect(ticker) {
       if(d2>=monthStart) monthOpen=closes[i-1]||monthOpen;
     }
     const preMarket = meta.preMarketPrice||null;
-    const preMarketReturn = preMarket&&price>0?(preMarket-price)/price*100:null;
-    return {price,prev,weekOpen,monthOpen,preMarket,preMarketReturn};
+    const preMarketReturn = preMarket&&prev>0?(preMarket-prev)/prev*100:null;
+    const marketState = meta.marketState||'CLOSED';
+    const dailyRet = marketState==='REGULAR'&&prev>0?(price-prev)/prev*100:null;
+    const wtdRet = weekOpen&&weekOpen!==price?(price-weekOpen)/weekOpen*100:null;
+    const mthRet = monthOpen&&monthOpen!==price?(price-monthOpen)/monthOpen*100:null;
+    return {price,prev,weekOpen,monthOpen,preMarket,preMarketReturn,
+            dailyReturn:dailyRet,wtdReturn:wtdRet,monthlyReturn:mthRet};
   }
 
   // Race all proxies — first valid response wins
