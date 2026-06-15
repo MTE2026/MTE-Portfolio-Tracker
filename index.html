@@ -592,7 +592,7 @@ function parseASQuote(ticker, q) {
     wtdReturn: q.wtdReturn,
     monthlyReturn: q.monthlyReturn,
     preMarket: q.preMarketPrice||null,
-    preMarketReturn: q.preMarketPrice&&q.price>0?(q.preMarketPrice-q.price)/q.price*100:null
+    preMarketReturn: q.preMarketReturn || (q.preMarketPrice&&q.prevClose>0?(q.preMarketPrice-q.prevClose)/q.prevClose*100:null)
   };
 }
 
