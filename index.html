@@ -590,7 +590,9 @@ function parseASQuote(ticker, q) {
     price, prev, weekOpen, monthOpen,
     dailyReturn: q.dailyReturn,
     wtdReturn: q.wtdReturn,
-    monthlyReturn: q.monthlyReturn
+    monthlyReturn: q.monthlyReturn,
+    preMarket: q.preMarketPrice||null,
+    preMarketReturn: q.preMarketPrice&&q.price>0?(q.preMarketPrice-q.price)/q.price*100:null
   };
 }
 
@@ -609,24 +611,32 @@ async function loadPrices() {
       }
     }).catch(()=>{});
 
-  try {
-    const url = `${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(tickers.join(','))}`;
-    const r = await fetch(url);
-    if (r.ok) {
-      const data = await r.json();
-      if (data && typeof data === 'object') {
-        tickers.forEach(t => { if (data[t]) S.prices[t] = parseASQuote(t, data[t]); });
-        await vixPromise;
-        document.getElementById('status-txt').textContent='Updated '+new Date().toLocaleTimeString();
-        document.getElementById('status-dot').style.background='#27ae60';
-        rerender();
-        return;
-      }
-    }
-  } catch(e) { console.warn('Apps Script fetch failed, falling back:', e); }
+  // Race: Apps Script vs direct Yahoo — whichever responds first wins
+  // This ensures Safari (which blocks Apps Script) still gets prices
+  const appsScriptPromise = Promise.race([
+    fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(tickers.join(','))}`)
+      .then(r=>r.ok?r.json():null),
+    new Promise(resolve=>setTimeout(()=>resolve(null), 5000)) // 5s timeout
+  ]).catch(()=>null);
 
-  // Fallback: direct Yahoo Finance
-  const results = await Promise.all(tickers.map(t=>fetchPriceDirect(t).then(p=>[t,p])));
+  // Start direct Yahoo fetch in parallel immediately
+  const directPromise = Promise.all(tickers.map(t=>fetchPriceDirect(t).then(p=>[t,p])));
+
+  try {
+    const asData = await appsScriptPromise;
+    if (asData && typeof asData === 'object' && Object.values(asData).some(v=>v?.success)) {
+      // Apps Script succeeded — use its data (more accurate)
+      tickers.forEach(t => { if (asData[t]) S.prices[t] = parseASQuote(t, asData[t]); });
+      await vixPromise;
+      document.getElementById('status-txt').textContent='Updated '+new Date().toLocaleTimeString();
+      document.getElementById('status-dot').style.background='#27ae60';
+      rerender();
+      return;
+    }
+  } catch(e) {}
+
+  // Apps Script failed or timed out — use direct Yahoo results
+  const results = await directPromise;
   results.forEach(([t,p])=>S.prices[t]=p);
   await vixPromise;
   document.getElementById('status-txt').textContent='Updated '+new Date().toLocaleTimeString();
@@ -636,36 +646,54 @@ async function loadPrices() {
 async function refreshPrices() { await loadPrices(); }
 
 async function fetchPriceDirect(ticker) {
-  const urls = [
+  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=6mo`;
+  const proxyUrls = [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
+    `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`,
     `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=6mo`,
     `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=6mo`,
-    `https://corsproxy.io/?${encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/'+ticker+'?interval=1d&range=6mo')}`,
   ];
-  for (const url of urls) {
-    try {
-      const r = await fetch(url);
-      if (!r.ok) continue;
-      const d = await r.json();
-      if (!d.chart?.result?.[0]) continue;
-      const meta = d.chart.result[0].meta;
-      const closes = d.chart.result[0].indicators.quote[0].close.filter(x=>x!=null);
-      const ts = d.chart.result[0].timestamp;
-      const price = meta.regularMarketPrice || closes[closes.length-1];
-      const prev = meta.chartPreviousClose || closes[closes.length-2] || price;
-      const now = new Date(); const dow = now.getDay();
-      const daysToMon = dow===0?6:dow-1;
-      const monDate = new Date(now); monDate.setDate(now.getDate()-daysToMon); monDate.setHours(0,0,0,0);
-      const monthStart = new Date(now.getFullYear(),now.getMonth(),1);
-      let weekOpen=price, monthOpen=price;
-      for(let i=ts.length-1;i>=1;i--){
-        const d2=new Date(ts[i]*1000);
-        if(d2>=monDate) weekOpen=closes[i-1]||weekOpen;
-        if(d2>=monthStart) monthOpen=closes[i-1]||monthOpen;
-      }
-      return {price,prev,weekOpen,monthOpen};
-    } catch(e){ continue; }
+
+  function parseYahoo(d){
+    if(!d?.chart?.result?.[0]) return null;
+    const meta=d.chart.result[0].meta;
+    const closes=d.chart.result[0].indicators.quote[0].close.filter(x=>x!=null);
+    const ts=d.chart.result[0].timestamp;
+    const price=meta.regularMarketPrice||closes[closes.length-1];
+    const prev=meta.chartPreviousClose||closes[closes.length-2]||price;
+    const now=new Date(); const dow=now.getDay();
+    const daysToMon=dow===0?6:dow-1;
+    const monDate=new Date(now); monDate.setDate(now.getDate()-daysToMon); monDate.setHours(0,0,0,0);
+    const monthStart=new Date(now.getFullYear(),now.getMonth(),1);
+    let weekOpen=price, monthOpen=price;
+    for(let i=ts.length-1;i>=1;i--){
+      const d2=new Date(ts[i]*1000);
+      if(d2>=monDate) weekOpen=closes[i-1]||weekOpen;
+      if(d2>=monthStart) monthOpen=closes[i-1]||monthOpen;
+    }
+    const preMarket = meta.preMarketPrice||null;
+    const preMarketReturn = preMarket&&price>0?(preMarket-price)/price*100:null;
+    return {price,prev,weekOpen,monthOpen,preMarket,preMarketReturn};
   }
-  return {price:0,prev:0,weekOpen:0,monthOpen:0};
+
+  // Race all proxies — first valid response wins
+  return new Promise(resolve=>{
+    let resolved=false;
+    let failed=0;
+    proxyUrls.forEach(url=>{
+      fetch(url).then(r=>r.ok?r.json():null).then(d=>{
+        if(resolved) return;
+        const parsed=parseYahoo(d);
+        if(parsed){ resolved=true; resolve(parsed); }
+        else { failed++; if(failed===proxyUrls.length) resolve({price:0,prev:0,weekOpen:0,monthOpen:0}); }
+      }).catch(()=>{
+        failed++;
+        if(failed===proxyUrls.length) resolve({price:0,prev:0,weekOpen:0,monthOpen:0});
+      });
+    });
+    // Overall timeout 12 seconds
+    setTimeout(()=>{ if(!resolved){ resolved=true; resolve({price:0,prev:0,weekOpen:0,monthOpen:0}); } },12000);
+  });
 }
 
 // ━━━ RETURN CALCS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -673,6 +701,21 @@ const pct = (v,bold) => v!=null&&!isNaN(v) ? (v>=0?'+':'')+v.toFixed(2)+'%' : '�
 const cls = v => v>0.005?'pos':v<-0.005?'neg':'neu';
 const pf = v => parseFloat((v||'0').toString().replace('%',''))||0;
 
+function pmRet(t){ const p=S.prices[t]; return p?.preMarketReturn||null; }
+function pmPrice(t){ const p=S.prices[t]; return p?.preMarket||null; }
+function modelPreMarket(name){
+  const m=S.models.find(x=>x.name===name);
+  if(m&&m.isBlend){
+    const comps=S.blends[name]||[]; if(!comps.length) return null;
+    let r=0,hasData=false;
+    comps.forEach(c=>{ const sub=modelPreMarket(c.m); if(sub!=null){r+=c.w/100*sub;hasData=true;} });
+    return hasData?r:null;
+  }
+  const h=S.holdings[name]||[]; if(!h.length) return null;
+  let r=0,hasData=false;
+  h.forEach(x=>{ const pm=pmRet(x.t); if(pm!=null){r+=x.w/100*pm;hasData=true;} });
+  return hasData?r:null;
+}
 function dRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.dailyReturn!=null) return p.dailyReturn; return p.prev?(p.price-p.prev)/p.prev*100:0; }
 function wRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.wtdReturn!=null) return p.wtdReturn; return p.weekOpen&&p.weekOpen!==p.price?(p.price-p.weekOpen)/p.weekOpen*100:0; }
 function mRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.monthlyReturn!=null) return p.monthlyReturn; return p.monthOpen&&p.monthOpen!==p.price?(p.price-p.monthOpen)/p.monthOpen*100:0; }
@@ -914,85 +957,116 @@ function renderOverview(){
   const best=S.models[bestIdx]||{name:'—'};
   const spyYTD=benchYTD('SPY');
 
+  // Model groups
+  const CUSTOM_MODELS = ['Conservative','Aggressive Regular','Aggressive Margin','Balanced Growth + Yield (IBKR)','Balanced Growth + Yield (Schwab)','MTI 2025','<10K','<50K'];
+  const STOCK_MODELS  = ['All Weather Core','All Weather Momentum','High Beta Tech','Nasdaq Select 15'];
+
+  function modelRow(m){
+    const d=getModelRet(m.name,dRet);
+    const w=getModelRet(m.name,wRet);
+    const mt=getModelRet(m.name,mRet);
+    const ytd=calcYTD(m.name,2026);
+    const aYTD=ytd-spyYTD;
+    const yld=m.isBlend?0:modelYield(m.name);
+    const pm=modelPreMarket(m.name);
+    const pmCell=pm!=null?`<span class="${cls(pm)}" style="font-size:11px;font-weight:600;">${pct(pm)}</span>`:'<span style="color:var(--text-3);font-size:11px;">—</span>';
+    return `<tr class="row" onclick="showModel('${m.name.replace(/'/g,"\\'")}')">
+      <td><span class="model-nm">${m.name}</span>${m.isBlend?'<span class="blend-pill">Blend</span>':''}</td>
+      <td class="r">${pmCell}</td>
+      <td class="r ${cls(d)}">${pct(d)}</td>
+      <td class="r ${cls(w)}">${pct(w)}</td>
+      <td class="r ${cls(mt)}">${pct(mt)}</td>
+      <td class="r ${cls(ytd)}" style="font-weight:700;">${pct(ytd)}</td>
+      <td class="r ${cls(aYTD)}" style="font-weight:600;">${pct(aYTD)}</td>
+      <td class="r" style="color:var(--green);font-weight:600;">${yld>0?yld.toFixed(1)+'%':'—'}</td>
+    </tr>`;
+  }
+
+  function modelSection(title, names){
+    const models = names.map(n=>S.models.find(m=>m.name===n)).filter(Boolean);
+    if(!models.length) return '';
+    return `<div class="sec-card" style="margin-bottom:14px;">
+      <div class="sec-head"><div class="sec-title">${title}</div><div class="sec-hint">Click any row for detail</div></div>
+      <div class="tbl-scroll"><table class="ov-tbl">
+        <thead><tr>
+          <th style="min-width:180px;">Model</th>
+          <th class="r">Pre-Mkt</th>
+          <th class="r">Daily</th>
+          <th class="r">WTD</th>
+          <th class="r">MTD</th>
+          <th class="r">YTD 2026</th>
+          <th class="r">Alpha YTD</th>
+          <th class="r">Yield</th>
+        </tr></thead>
+        <tbody>${models.map(modelRow).join('')}</tbody>
+      </table></div>
+    </div>`;
+  }
+
   // Benchmark rows
   const benchRows=BENCHMARKS.map(b=>{
     const d=dRet(b.sym), w=wRet(b.sym), mt=mRet(b.sym);
     const ytd=benchYTD(b.ticker);
     const aYTD=b.ticker==='SPY'?null:ytd-spyYTD;
+    const pm=pmRet(b.sym);
     return `<tr style="background:#FAFBFC;">
       <td><span style="font-weight:700;color:var(--blue);font-size:13px;">${b.ticker}</span>
           <span style="font-size:11px;color:var(--text-3);margin-left:6px;">${b.name}</span></td>
+      <td class="r ${pm!=null?cls(pm):'neu'}">${pm!=null?pct(pm):'—'}</td>
       <td class="r ${cls(d)}">${pct(d)}</td>
       <td class="r ${cls(w)}">${pct(w)}</td>
       <td class="r ${cls(mt)}">${pct(mt)}</td>
       <td class="r ${cls(ytd)}" style="font-weight:700;">${pct(ytd)}</td>
       <td class="r ${aYTD!==null?cls(aYTD):'neu'}">${aYTD!==null?pct(aYTD):'—'}</td>
-      <td class="r neu">—</td>
     </tr>`;
   }).join('');
 
+  // Remaining models
+  const allGrouped = [...CUSTOM_MODELS, ...STOCK_MODELS, ...BENCHMARKS.map(b=>b.ticker)];
+  const otherModels = S.models.filter(m=>!allGrouped.includes(m.name));
+
+  const vix=S.prices['^VIX'];
   document.getElementById('content').innerHTML=`
   <div class="sum-cards">
     <div class="sum-card"><div class="sc-label">Models Tracked</div><div class="sc-val" style="color:var(--navy);">${S.models.length}</div><div class="sc-sub">${S.models.filter(m=>!m.isBlend).length} direct · ${S.models.filter(m=>m.isBlend).length} blended</div></div>
     <div class="sum-card"><div class="sc-label">SPY YTD 2026</div><div class="sc-val ${cls(spyYTD)}">${pct(spyYTD)}</div><div class="sc-sub">Benchmark · Jan–Jun cumulative</div></div>
-    <div class="sum-card"><div class="sc-label">VIX — S&P 500 Volatility</div><div class="sc-val" style="color:${(S.prices['^VIX']?.price||0)>25?'var(--red)':(S.prices['^VIX']?.price||0)>18?'var(--orange)':'var(--green)'};">${S.prices['^VIX']?.price?S.prices['^VIX'].price.toFixed(2):'—'}</div><div class="sc-sub">${S.prices['^VIX']?.price?((S.prices['^VIX'].price>25?'⚠ Elevated fear':S.prices['^VIX'].price>18?'⚡ Caution':'✓ Low volatility')+' · Live'):'Fetching…'}</div></div>
+    <div class="sum-card"><div class="sc-label">VIX — S&P 500 Volatility</div><div class="sc-val" style="color:${(vix?.price||0)>25?'var(--red)':(vix?.price||0)>18?'var(--orange)':'var(--green)'};">${vix?.price?vix.price.toFixed(2):'—'}</div><div class="sc-sub">${vix?.price?((vix.price>25?'⚠ Elevated fear':vix.price>18?'⚡ Caution':'✓ Low volatility')+' · Live'):'Fetching…'}</div></div>
     <div class="sum-card"><div class="sc-label">Best YTD 2026</div><div class="sc-val ${cls(calcYTD(best.name,2026))}">${pct(calcYTD(best.name,2026))}</div><div class="sc-sub">${best.name}</div></div>
   </div>
   <div class="sec-card" style="margin-bottom:14px;">
-    <div class="sec-head">
-      <div class="sec-title">Market Benchmarks</div>
-      <div class="sec-hint" style="font-size:11px;color:var(--text-3);">Enter Jan–May returns via Monthly Returns tab on each benchmark · May 29 prices used as YTD anchor</div>
-    </div>
-    <div class="tbl-scroll">
-    <table class="ov-tbl">
+    <div class="sec-head"><div class="sec-title">Market Benchmarks</div><div class="sec-hint">Pre-market shown before market open</div></div>
+    <div class="tbl-scroll"><table class="ov-tbl">
       <thead><tr>
-        <th style="min-width:200px;">Index</th>
+        <th style="min-width:160px;">Index</th>
+        <th class="r">Pre-Mkt</th>
         <th class="r">Daily</th>
         <th class="r">WTD</th>
         <th class="r">MTD</th>
         <th class="r">YTD 2026</th>
-        <th class="r">Alpha YTD vs SPY</th>
-        <th class="r">Yield</th>
+        <th class="r">Alpha YTD</th>
       </tr></thead>
       <tbody>${benchRows}</tbody>
-    </table>
-    </div>
+    </table></div>
   </div>
-  <div class="sec-card">
-    <div class="sec-head"><div class="sec-title">All Models — 2026 Performance</div><div class="sec-hint">Click any row for detail</div></div>
-    <div class="tbl-scroll">
-    <table class="ov-tbl">
+  ${modelSection('Custom Models', CUSTOM_MODELS)}
+  ${modelSection('Stock Models', STOCK_MODELS)}
+  ${otherModels.length?`<div class="sec-card" style="margin-bottom:14px;">
+    <div class="sec-head"><div class="sec-title">All Other Models</div><div class="sec-hint">Click any row for detail</div></div>
+    <div class="tbl-scroll"><table class="ov-tbl">
       <thead><tr>
-        <th style="min-width:200px;">Model</th>
+        <th style="min-width:180px;">Model</th>
+        <th class="r">Pre-Mkt</th>
         <th class="r">Daily</th>
         <th class="r">WTD</th>
         <th class="r">MTD</th>
         <th class="r">YTD 2026</th>
-        <th class="r">Alpha YTD vs SPY</th>
+        <th class="r">Alpha YTD</th>
         <th class="r">Yield</th>
       </tr></thead>
-      <tbody>
-        ${S.models.map(m=>{
-          const d=getModelRet(m.name,dRet);
-          const w=getModelRet(m.name,wRet);
-          const mt=getModelRet(m.name,mRet);
-          const ytd=calcYTD(m.name,2026);
-          const aYTD=ytd-spyYTD;
-          const yld=m.isBlend?0:modelYield(m.name);
-          return `<tr class="row" onclick="showModel('${m.name.replace(/'/g,"\\'")}')">
-            <td><span class="model-nm">${m.name}</span>${m.isBlend?'<span class="blend-pill">Blend</span>':''}</td>
-            <td class="r ${cls(d)}">${pct(d)}</td>
-            <td class="r ${cls(w)}">${pct(w)}</td>
-            <td class="r ${cls(mt)}">${pct(mt)}</td>
-            <td class="r ${cls(ytd)}" style="font-weight:700;">${pct(ytd)}</td>
-            <td class="r ${cls(aYTD)}" style="font-weight:600;">${pct(aYTD)}</td>
-            <td class="r" style="color:var(--green);font-weight:600;">${yld>0?yld.toFixed(1)+'%':'—'}</td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
-    </div>
-  </div>`;
+      <tbody>${otherModels.map(modelRow).join('')}</tbody>
+    </table></div>
+  </div>`:''}
+  `;
 }
 
 // ━━━ MODEL DETAIL ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1127,13 +1201,15 @@ function buildHoldings(){
     </div>
     <table class="h-tbl">
       <thead><tr>
-        <th>Ticker</th><th class="r">Price</th><th class="r">Daily</th><th class="r">WTD</th><th class="r">MTD</th>
+        <th>Ticker</th><th class="r">Price</th><th class="r">Pre-Mkt</th><th class="r">Daily</th><th class="r">WTD</th><th class="r">MTD</th>
         <th class="r">Weight %</th><th class="r">Drifted %</th><th class="r">Contrib</th>
         <th class="r">Ann. Yield</th>${isE?'<th></th>':''}
       </tr></thead>
       <tbody>${h.map((x,i)=>{
         const p=S.prices[x.t]||{price:0};
         const d=dRet(x.t),w2=wRet(x.t),m=mRet(x.t);
+        const pm=pmRet(x.t);
+        const pmCell=pm!=null?`<span class="${cls(pm)}">${pct(pm)}</span>`:'<span style="color:var(--text-3);">—</span>';
         const tgtPct=x.w/tw*100;
         const dr=driftedW(x.t,name);
         const diff=dr-tgtPct; const flag=Math.abs(diff)>tol;
@@ -1142,6 +1218,7 @@ function buildHoldings(){
         return `<tr>
           <td><span class="tkr" style="cursor:pointer;" onclick="openResearch('${x.t}')">${x.t}</span></td>
           <td class="r">$${p.price.toFixed(2)}</td>
+          <td class="r">${pmCell}</td>
           <td class="r ${cls(d)}">${pct(d)}</td>
           <td class="r ${cls(w2)}">${pct(w2)}</td>
           <td class="r ${cls(m)}">${pct(m)}</td>
