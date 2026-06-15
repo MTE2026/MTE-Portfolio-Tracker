@@ -590,9 +590,7 @@ function parseASQuote(ticker, q) {
     price, prev, weekOpen, monthOpen,
     dailyReturn: q.dailyReturn,
     wtdReturn: q.wtdReturn,
-    monthlyReturn: q.monthlyReturn,
-    preMarket: q.preMarketPrice||null,
-    preMarketReturn: q.preMarketReturn || (q.preMarketPrice&&q.prevClose>0?(q.preMarketPrice-q.prevClose)/q.prevClose*100:null)
+    monthlyReturn: q.monthlyReturn
   };
 }
 
@@ -671,14 +669,7 @@ async function fetchPriceDirect(ticker) {
       if(d2>=monDate) weekOpen=closes[i-1]||weekOpen;
       if(d2>=monthStart) monthOpen=closes[i-1]||monthOpen;
     }
-    const preMarket = meta.preMarketPrice||null;
-    const preMarketReturn = preMarket&&prev>0?(preMarket-prev)/prev*100:null;
-    const marketState = meta.marketState||'CLOSED';
-    const dailyRet = marketState==='REGULAR'&&prev>0?(price-prev)/prev*100:null;
-    const wtdRet = weekOpen&&weekOpen!==price?(price-weekOpen)/weekOpen*100:null;
-    const mthRet = monthOpen&&monthOpen!==price?(price-monthOpen)/monthOpen*100:null;
-    return {price,prev,weekOpen,monthOpen,preMarket,preMarketReturn,
-            dailyReturn:dailyRet,wtdReturn:wtdRet,monthlyReturn:mthRet};
+    return {price,prev,weekOpen,monthOpen};
   }
 
   // Race all proxies — first valid response wins
@@ -703,7 +694,7 @@ async function fetchPriceDirect(ticker) {
 
 // ━━━ RETURN CALCS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const pct = (v,bold) => v!=null&&!isNaN(v) ? (v>=0?'+':'')+v.toFixed(2)+'%' : '—';
-const cls = v => v==null||isNaN(v)?'neu':v>0.005?'pos':v<-0.005?'neg':'neu';
+const cls = v => v>0.005?'pos':v<-0.005?'neg':'neu';
 const pf = v => parseFloat((v||'0').toString().replace('%',''))||0;
 
 function pmRet(t){ const p=S.prices[t]; return p?.preMarketReturn||null; }
@@ -721,16 +712,9 @@ function modelPreMarket(name){
   h.forEach(x=>{ const pm=pmRet(x.t); if(pm!=null){r+=x.w/100*pm;hasData=true;} });
   return hasData?r:null;
 }
-function dRet(t){ 
-  const p=S.prices[t]; 
-  if(!p) return null; 
-  if(p.dailyReturn!=null) return p.dailyReturn; 
-  // If weekOpen equals price, market hasn't moved — likely closed
-  if(p.prev&&p.price&&p.prev!==p.price) return (p.price-p.prev)/p.prev*100;
-  return null;
-}
-function wRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.wtdReturn!=null) return p.wtdReturn; return p.weekOpen&&p.weekOpen!==p.price?(p.price-p.weekOpen)/p.weekOpen*100:0; }
-function mRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.monthlyReturn!=null) return p.monthlyReturn; return p.monthOpen&&p.monthOpen!==p.price?(p.price-p.monthOpen)/p.monthOpen*100:0; }
+function dRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.dailyReturn!=null) return p.dailyReturn; return p.prev?(p.price-p.prev)/p.prev*100:0; }
+function wRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.wtdReturn!=null) return p.wtdReturn; return p.weekOpen?(p.price-p.weekOpen)/p.weekOpen*100:0; }
+function mRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.monthlyReturn!=null) return p.monthlyReturn; return p.monthOpen?(p.price-p.monthOpen)/p.monthOpen*100:0; }
 
 // Use raw weights / 100 so that a 115% model correctly amplifies returns
 // e.g. if weights sum to 115, each position contributes weight/100 (not weight/115)
@@ -984,7 +968,6 @@ function renderOverview(){
     const pmCell=pm!=null?`<span class="${cls(pm)}" style="font-size:11px;font-weight:600;">${pct(pm)}</span>`:'<span style="color:var(--text-3);font-size:11px;">—</span>';
     return `<tr class="row" onclick="showModel('${m.name.replace(/'/g,"\\'")}')">
       <td><span class="model-nm">${m.name}</span>${m.isBlend?'<span class="blend-pill">Blend</span>':''}</td>
-      <td class="r">${pmCell}</td>
       <td class="r ${cls(d)}">${pct(d)}</td>
       <td class="r ${cls(w)}">${pct(w)}</td>
       <td class="r ${cls(mt)}">${pct(mt)}</td>
@@ -1002,7 +985,6 @@ function renderOverview(){
       <div class="tbl-scroll"><table class="ov-tbl">
         <thead><tr>
           <th style="min-width:180px;">Model</th>
-          <th class="r">Pre-Mkt</th>
           <th class="r">Daily</th>
           <th class="r">WTD</th>
           <th class="r">MTD</th>
@@ -1020,11 +1002,9 @@ function renderOverview(){
     const d=dRet(b.sym), w=wRet(b.sym), mt=mRet(b.sym);
     const ytd=benchYTD(b.ticker);
     const aYTD=b.ticker==='SPY'?null:ytd-spyYTD;
-    const pm=pmRet(b.sym);
     return `<tr style="background:#FAFBFC;">
       <td><span style="font-weight:700;color:var(--blue);font-size:13px;">${b.ticker}</span>
           <span style="font-size:11px;color:var(--text-3);margin-left:6px;">${b.name}</span></td>
-      <td class="r ${pm!=null?cls(pm):'neu'}">${pm!=null?pct(pm):'—'}</td>
       <td class="r ${cls(d)}">${pct(d)}</td>
       <td class="r ${cls(w)}">${pct(w)}</td>
       <td class="r ${cls(mt)}">${pct(mt)}</td>
@@ -1050,7 +1030,6 @@ function renderOverview(){
     <div class="tbl-scroll"><table class="ov-tbl">
       <thead><tr>
         <th style="min-width:160px;">Index</th>
-        <th class="r">Pre-Mkt</th>
         <th class="r">Daily</th>
         <th class="r">WTD</th>
         <th class="r">MTD</th>
@@ -1067,7 +1046,6 @@ function renderOverview(){
     <div class="tbl-scroll"><table class="ov-tbl">
       <thead><tr>
         <th style="min-width:180px;">Model</th>
-        <th class="r">Pre-Mkt</th>
         <th class="r">Daily</th>
         <th class="r">WTD</th>
         <th class="r">MTD</th>
@@ -1213,15 +1191,13 @@ function buildHoldings(){
     </div>
     <table class="h-tbl">
       <thead><tr>
-        <th>Ticker</th><th class="r">Price</th><th class="r">Pre-Mkt</th><th class="r">Daily</th><th class="r">WTD</th><th class="r">MTD</th>
+        <th>Ticker</th><th class="r">Price</th><th class="r">Daily</th><th class="r">WTD</th><th class="r">MTD</th>
         <th class="r">Weight %</th><th class="r">Drifted %</th><th class="r">Contrib</th>
         <th class="r">Ann. Yield</th>${isE?'<th></th>':''}
       </tr></thead>
       <tbody>${h.map((x,i)=>{
         const p=S.prices[x.t]||{price:0};
         const d=dRet(x.t),w2=wRet(x.t),m=mRet(x.t);
-        const pm=pmRet(x.t);
-        const pmCell=pm!=null?`<span class="${cls(pm)}">${pct(pm)}</span>`:'<span style="color:var(--text-3);">—</span>';
         const tgtPct=x.w/tw*100;
         const dr=driftedW(x.t,name);
         const diff=dr-tgtPct; const flag=Math.abs(diff)>tol;
@@ -1230,7 +1206,6 @@ function buildHoldings(){
         return `<tr>
           <td><span class="tkr" style="cursor:pointer;" onclick="openResearch('${x.t}')">${x.t}</span></td>
           <td class="r">$${p.price.toFixed(2)}</td>
-          <td class="r">${pmCell}</td>
           <td class="r ${cls(d)}">${pct(d)}</td>
           <td class="r ${cls(w2)}">${pct(w2)}</td>
           <td class="r ${cls(m)}">${pct(m)}</td>
