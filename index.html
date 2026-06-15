@@ -698,7 +698,7 @@ async function fetchPriceDirect(ticker) {
 
 // ━━━ RETURN CALCS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const pct = (v,bold) => v!=null&&!isNaN(v) ? (v>=0?'+':'')+v.toFixed(2)+'%' : '—';
-const cls = v => v>0.005?'pos':v<-0.005?'neg':'neu';
+const cls = v => v==null||isNaN(v)?'neu':v>0.005?'pos':v<-0.005?'neg':'neu';
 const pf = v => parseFloat((v||'0').toString().replace('%',''))||0;
 
 function pmRet(t){ const p=S.prices[t]; return p?.preMarketReturn||null; }
@@ -716,7 +716,14 @@ function modelPreMarket(name){
   h.forEach(x=>{ const pm=pmRet(x.t); if(pm!=null){r+=x.w/100*pm;hasData=true;} });
   return hasData?r:null;
 }
-function dRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.dailyReturn!=null) return p.dailyReturn; return p.prev?(p.price-p.prev)/p.prev*100:0; }
+function dRet(t){ 
+  const p=S.prices[t]; 
+  if(!p) return null; 
+  if(p.dailyReturn!=null) return p.dailyReturn; 
+  // If weekOpen equals price, market hasn't moved — likely closed
+  if(p.prev&&p.price&&p.prev!==p.price) return (p.price-p.prev)/p.prev*100;
+  return null;
+}
 function wRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.wtdReturn!=null) return p.wtdReturn; return p.weekOpen&&p.weekOpen!==p.price?(p.price-p.weekOpen)/p.weekOpen*100:0; }
 function mRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.monthlyReturn!=null) return p.monthlyReturn; return p.monthOpen&&p.monthOpen!==p.price?(p.price-p.monthOpen)/p.monthOpen*100:0; }
 
