@@ -609,33 +609,25 @@ async function loadPrices() {
       }
     }).catch(()=>{});
 
-  // Race: Apps Script vs direct Yahoo — whichever responds first wins
-  // This ensures Safari (which blocks Apps Script) still gets prices
-  const appsScriptPromise = Promise.race([
-    fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(tickers.join(','))}`)
-      .then(r=>r.ok?r.json():null),
-    new Promise(resolve=>setTimeout(()=>resolve(null), 5000)) // 5s timeout
-  ]).catch(()=>null);
-
-  // Start direct Yahoo fetch in parallel immediately
-  const directPromise = Promise.all(tickers.map(t=>fetchPriceDirect(t).then(p=>[t,p])));
-
+  // Try Apps Script first — most accurate data
+  // Direct Yahoo runs as backup only if Apps Script fails/times out
+  let asData = null;
   try {
-    const asData = await appsScriptPromise;
-    if (asData && typeof asData === 'object' && Object.values(asData).some(v=>v?.success)) {
-      // Apps Script succeeded — use its data (more accurate)
-      tickers.forEach(t => { if (asData[t]) S.prices[t] = parseASQuote(t, asData[t]); });
-      await vixPromise;
-      document.getElementById('status-txt').textContent='Updated '+new Date().toLocaleTimeString();
-      document.getElementById('status-dot').style.background='#27ae60';
-      rerender();
-      return;
-    }
-  } catch(e) {}
+    const r = await Promise.race([
+      fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(tickers.join(','))}`).then(r=>r.ok?r.json():null),
+      new Promise(resolve=>setTimeout(()=>resolve(null), 8000))
+    ]);
+    if(r && typeof r === 'object' && Object.values(r).some(v=>v?.success)) asData = r;
+  } catch(e){}
 
-  // Apps Script failed or timed out — use direct Yahoo results
-  const results = await directPromise;
-  results.forEach(([t,p])=>S.prices[t]=p);
+  if(asData){
+    tickers.forEach(t=>{ if(asData[t]) S.prices[t]=parseASQuote(t,asData[t]); });
+  } else {
+    // Apps Script failed — use direct Yahoo
+    const results = await Promise.all(tickers.map(t=>fetchPriceDirect(t).then(p=>[t,p])));
+    results.forEach(([t,p])=>S.prices[t]=p);
+  }
+
   await vixPromise;
   document.getElementById('status-txt').textContent='Updated '+new Date().toLocaleTimeString();
   document.getElementById('status-dot').style.background='#27ae60';
