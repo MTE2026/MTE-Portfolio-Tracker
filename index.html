@@ -609,24 +609,16 @@ async function loadPrices() {
       }
     }).catch(()=>{});
 
-  // Try Apps Script first — most accurate data
-  // Direct Yahoo runs as backup only if Apps Script fails/times out
-  let asData = null;
+  // Use Apps Script exclusively for accurate data
   try {
-    const r = await Promise.race([
-      fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(tickers.join(','))}`).then(r=>r.ok?r.json():null),
-      new Promise(resolve=>setTimeout(()=>resolve(null), 8000))
-    ]);
-    if(r && typeof r === 'object' && Object.values(r).some(v=>v?.success)) asData = r;
-  } catch(e){}
-
-  if(asData){
-    tickers.forEach(t=>{ if(asData[t]) S.prices[t]=parseASQuote(t,asData[t]); });
-  } else {
-    // Apps Script failed — use direct Yahoo
-    const results = await Promise.all(tickers.map(t=>fetchPriceDirect(t).then(p=>[t,p])));
-    results.forEach(([t,p])=>S.prices[t]=p);
-  }
+    const r = await fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(tickers.join(','))}`);
+    if(r.ok){
+      const asData = await r.json();
+      if(asData && typeof asData === 'object'){
+        tickers.forEach(t=>{ if(asData[t]&&asData[t].success) S.prices[t]=parseASQuote(t,asData[t]); });
+      }
+    }
+  } catch(e){ console.warn('Apps Script failed:', e); }
 
   await vixPromise;
   document.getElementById('status-txt').textContent='Updated '+new Date().toLocaleTimeString();
