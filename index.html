@@ -1935,8 +1935,8 @@ function scannerRow(ticker, type){
   const d=dRet(ticker);
   // True YTD from Dec 31 2025 close
   const dec31 = DEC31_CACHE[ticker];
-  const p = S.prices[ticker];
-  const ytd = dec31&&p&&dec31>0?(p.price-dec31)/dec31*100:null;
+  const tickerPrice = S.prices[ticker];
+  const ytd = dec31&&tickerPrice&&dec31>0?(tickerPrice.price-dec31)/dec31*100:null;
   const spyDec31 = DEC31_CACHE['SPY'];
   const spyP = S.prices['SPY'];
   const spyYTD = spyDec31&&spyP&&spyDec31>0?(spyP.price-spyDec31)/spyDec31*100:null;
@@ -1983,10 +1983,12 @@ function renderScanner(){
   const {portfolio,watchlist}=getScannerList(type);
   const list=SCANNER.tab==='portfolio'?portfolio:watchlist;
 
-  // Fetch Dec31 2025 prices for tickers not yet cached
+  // Fetch Dec31 2025 prices for tickers not yet cached — only trigger once
   const missing=[...new Set([...list,'SPY'])].filter(t=>!DEC31_CACHE[t]);
   if(missing.length){
-    fetchDec31Prices(missing).then(()=>renderScanner());
+    fetchDec31Prices(missing).then(()=>{
+      if(S.activeView==='scanner') renderScanner();
+    });
   }
 
   const tableHTML=`<div class="tbl-scroll"><table class="scanner-tbl">
