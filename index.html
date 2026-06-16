@@ -485,6 +485,7 @@ let S = {
   holdings: {},
   may29: {},
   yields: {},       // ticker -> annual yield %
+  costBasis: {},     // modelName|ticker -> avg cost per share
   blends: {},
   prices: {},
   returns: {},      // modelName -> {2024:[],2025:[],2026:[]}
@@ -517,6 +518,7 @@ function init() {
   S.returns = JSON.parse(localStorage.getItem('mte_returns') || 'null') || {"Large Cap Growth":{"2026":[-0.08,-1.18,-5.69,17.78,11.2,null,null,null,null,null,null,null]},"Large Cap Value":{"2026":[3.26,2.17,-6.06,7.85,3.88,null,null,null,null,null,null,null]},"Metals & Crypto":{"2026":[4.98,-4.91,-7.92,4.68,-1.6,null,null,null,null,null,null,null]},"International":{"2026":[3.32,4.06,-8.91,6.99,2.65,null,null,null,null,null,null,null]},"Small Mid Caps (E)":{"2026":[4.01,5.61,-4.08,12.48,3.15,null,null,null,null,null,null,null]},"Next Generation (E)":{"2026":[-2.67,-3.06,-6.34,15.07,11.82,null,null,null,null,null,null,null]},"Hedge/Low Beta":{"2026":[4.95,-1.04,-5.57,5.32,0.63,null,null,null,null,null,null,null]},"Custom Leverage":{"2026":[11.11,4.48,-7.42,6.52,1.62,null,null,null,null,null,null,null]},"Momentum":{"2026":[0.3,-2.92,-2.68,12.81,4.71,null,null,null,null,null,null,null]},"All Weather Core":{"2026":[1.52,-2.69,-4.01,16.12,11.4,null,null,null,null,null,null,null]},"All Weather Momentum":{"2026":[10.76,-4.07,-7.04,18.73,1.67,null,null,null,null,null,null,null]},"Balanced Growth + Yield (IBKR)":{"2026":[5.07,2.14,-6.52,5.77,2.94,null,null,null,null,null,null,null]},"MDA":{"2026":[-2.69,-16.13,0.23,15.99,3.94,null,null,null,null,null,null,null]},"High Beta Tech":{"2026":[-9.47,-7.44,-3.24,6.18,14.13,null,null,null,null,null,null,null]},"Conservative":{"2026":[1.64,0.53,-3.2,5.58,3.57,null,null,null,null,null,null,null]},"Nasdaq Select 15":{"2026":[0.44,-6.73,-4.85,22.63,19.17,null,null,null,null,null,null,null]},"China":{"2026":[2.14,-7.86,-9.49,5.8,-4.51,null,null,null,null,null,null,null]},"Aggressive Regular":{"2026":[2.98,-0.63,-6.28,9.54,4.1,null,null,null,null,null,null,null]},"Aggressive Margin":{"2026":[3.94,-1.22,-7,11.13,4.37,null,null,null,null,null,null,null]},"SPY":{"2026":[1.47,-0.86,-5.2,10.51,5.26,null,null,null,null,null,null,null]},"QQQ":{"2026":[1.23,-2.34,-4.96,15.69,10.57,null,null,null,null,null,null,null]},"IWM":{"2026":[5.48,0.68,-5.13,12.08,4.48,null,null,null,null,null,null,null]},"IBIT":{"2026":[-4.35,-21.69,3.31,12.75,-3.9,null,null,null,null,null,null,null]},"GLD":{"2026":[12.27,8.72,-11.05,-1.54,-1.54,null,null,null,null,null,null,null]},"Balanced Growth + Yield (Schwab)":{"2026":[4.6,1.9,-4.7,5.77,2.94,null,null,null,null,null,null,null]},"Schwab Aggressive":{"2026":[2.9,-0.1,-5.45,10.73,5.83,null,null,null,null,null,null,null]},"Schwab Moderately Aggressive":{"2026":[2.73,0.51,-5.62,9.67,6.12,null,null,null,null,null,null,null]},"Schwab Moderate":{"2026":[0.96,0.11,-4.03,9.23,3.81,null,null,null,null,null,null,null]}};
   S.lockedMonths = JSON.parse(localStorage.getItem('mte_locked') || '{}');
   S.yields = JSON.parse(localStorage.getItem('mte_yields') || 'null') || KNOWN_YIELDS;
+  S.costBasis = JSON.parse(localStorage.getItem('mte_cost') || '{}');
   S.monthEndPrices = {...SEED_MAY29, ...JSON.parse(localStorage.getItem('mte_mep') || '{}') };
   renderSidebar();
   showOverview();
@@ -540,6 +542,7 @@ async function syncFromServer(){
       });
       if(data.locked) Object.assign(S.lockedMonths, data.locked);
       if(data.blends && Object.keys(data.blends).length) S.blends = data.blends;
+      if(data.costBasis && Object.keys(data.costBasis).length) Object.assign(S.costBasis, data.costBasis);
       // Always merge SEED_MAY29 as base so mobile always has anchor prices
       S.monthEndPrices = {...SEED_MAY29, ...S.monthEndPrices};
       if(data.monthEndPrices && Object.keys(data.monthEndPrices).length){
@@ -548,6 +551,7 @@ async function syncFromServer(){
       localStorage.setItem('mte_returns', JSON.stringify(S.returns));
       localStorage.setItem('mte_locked', JSON.stringify(S.lockedMonths));
       localStorage.setItem('mte_mep', JSON.stringify(S.monthEndPrices));
+      localStorage.setItem('mte_cost', JSON.stringify(S.costBasis));
       rerender();
     }
   } catch(e){ console.log('Sync skipped:', e); }
@@ -560,6 +564,7 @@ function save() {
   localStorage.setItem('mte_returns', JSON.stringify(S.returns));
   localStorage.setItem('mte_locked', JSON.stringify(S.lockedMonths));
   localStorage.setItem('mte_yields', JSON.stringify(S.yields));
+  localStorage.setItem('mte_cost', JSON.stringify(S.costBasis));
   localStorage.setItem('mte_mep', JSON.stringify(S.monthEndPrices));
   // Push blends to server every time they change
   pushBlendsToServer();
@@ -871,7 +876,8 @@ async function syncHistoricalToServer(){
       returns: JSON.stringify(S.returns),
       locked: JSON.stringify(S.lockedMonths),
       mep: JSON.stringify(S.monthEndPrices),
-      blends: JSON.stringify(S.blends)
+      blends: JSON.stringify(S.blends),
+      costBasis: JSON.stringify(S.costBasis)
     });
     const r = await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
     const data = await r.json();
@@ -1116,6 +1122,20 @@ function renderDetail(){
   const ytd26=calcYTD(name,2026);
   const ytd25=calcYTD(name,2025);
   const yld=m.isBlend?0:modelYield(name);
+  // Since Inception — weighted avg cost basis return
+  function sinceInception(modelName){
+    const h=S.holdings[modelName]||[]; if(!h.length) return null;
+    const tw=h.reduce((a,x)=>a+x.w,0)||100;
+    let ret=0, hasAny=false;
+    h.forEach(x=>{
+      const cbKey=`${modelName}|${x.t}`;
+      const cost=S.costBasis[cbKey]||0;
+      const p=S.prices[x.t]?.price||0;
+      if(cost>0&&p>0){ ret+=(x.w/tw)*((p-cost)/cost*100); hasAny=true; }
+    });
+    return hasAny?ret:null;
+  }
+  const inception=m.isBlend?null:sinceInception(name);
   document.getElementById('content').innerHTML=`
   <div class="dpc-row">
     ${[
@@ -1125,6 +1145,7 @@ function renderDetail(){
       {l:'WTD',v:wt,s:'Week to date'},
       {l:'MTD',v:mt,s:'SPY '+pct(mRet('SPY'))},
       {l:'Alpha MTD',v:mt-mRet('SPY'),s:'vs SPY'},
+      {l:'Since Inception',v:inception,s:inception!=null?'vs avg cost basis':'Add cost basis in Holdings'},
       {l:'Yield',v:yld||null,s:'Weighted avg annual'},
     ].map(c=>`<div class="dpc"><div class="dpc-lbl">${c.l}</div><div class="dpc-val ${c.v!=null?cls(c.v):'neu'}">${c.v!=null?pct(c.v):'—'}</div><div class="dpc-sub">${c.s}</div></div>`).join('')}
   </div>
@@ -1226,6 +1247,7 @@ function buildHoldings(){
       <thead><tr>
         <th>Ticker</th><th class="r">Price</th><th class="r">Daily</th><th class="r">WTD</th><th class="r">MTD</th>
         <th class="r">Weight %</th><th class="r">Drifted %</th><th class="r">Contrib</th>
+        <th class="r">Avg Cost</th><th class="r">Return</th>
         <th class="r">Ann. Yield</th>${isE?'<th></th>':''}
       </tr></thead>
       <tbody>${h.map((x,i)=>{
@@ -1236,6 +1258,9 @@ function buildHoldings(){
         const diff=dr-tgtPct; const flag=Math.abs(diff)>tol;
         const contrib=tgtPct/100*d;
         const yld=S.yields[x.t]||0;
+        const cbKey=`${name}|${x.t}`;
+        const cost=S.costBasis[cbKey]||0;
+        const ret=cost>0&&p.price>0?(p.price-cost)/cost*100:null;
         return `<tr>
           <td><span class="tkr" style="cursor:pointer;" onclick="openResearch('${x.t}')">${x.t}</span></td>
           <td class="r">$${p.price.toFixed(2)}</td>
@@ -1245,6 +1270,8 @@ function buildHoldings(){
           <td class="r">${isE?`<input class="w-inp" value="${x.w}" onchange="updW(${i},this.value)">`:`${x.w.toFixed(1)}%`}</td>
           <td class="r ${flag?'drift-hi':''}">${dr.toFixed(1)}%${flag?` (${diff>0?'+':''}${diff.toFixed(1)}%)`:''}  </td>
           <td class="r ${cls(contrib)}">${pct(contrib)}</td>
+          <td class="r">${isE?`<input class="yield-inp" value="${cost||''}" onchange="updCost('${cbKey}',this.value)" placeholder="0.00" title="Avg cost per share" style="width:70px;">`:`${cost>0?'$'+cost.toFixed(2):'—'}`}</td>
+          <td class="r ${ret!=null?cls(ret):'neu'}" style="font-weight:${ret!=null?'600':'400'};">${ret!=null?pct(ret):'—'}</td>
           <td class="r" style="color:var(--green);">${isE?`<input class="yield-inp" value="${yld}" onchange="updYield('${x.t}',this.value)" title="Annual yield %">`:`${yld>0?yld.toFixed(1)+'%':'—'}`}</td>
           ${isE?`<td><button class="del-btn" onclick="delH(${i})">×</button></td>`:''}
         </tr>`;
@@ -1260,6 +1287,7 @@ function buildHoldings(){
 }
 function updW(i,v){ S.holdings[S.activeModel][i].w=parseFloat(v)||0; save(); renderSubTab(); }
 function updYield(t,v){ S.yields[t]=parseFloat(v)||0; save(); renderSubTab(); }
+function updCost(key,v){ S.costBasis[key]=parseFloat(v)||0; save(); renderSubTab(); }
 function delH(i){ S.holdings[S.activeModel].splice(i,1); save(); renderSubTab(); }
 function addH(){
   const t=document.getElementById('add-t').value.trim().toUpperCase();
