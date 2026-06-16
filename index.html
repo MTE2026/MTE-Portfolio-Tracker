@@ -620,7 +620,11 @@ function parseASQuote(ticker, q) {
     price, prev, weekOpen, monthOpen,
     dailyReturn: q.dailyReturn,
     wtdReturn: q.wtdReturn,
-    monthlyReturn: q.monthlyReturn
+    monthlyReturn: q.monthlyReturn,
+    ma50: q.ma50||0,
+    ma200: q.ma200||0,
+    rsi14: q.rsi14||0,
+    closes: q.closes||[]
   };
 }
 
@@ -683,7 +687,18 @@ async function fetchPriceDirect(ticker) {
       if(d2>=monDate) weekOpen=closes[i-1]||weekOpen;
       if(d2>=monthStart) monthOpen=closes[i-1]||monthOpen;
     }
-    return {price,prev,weekOpen,monthOpen};
+    const ma50=closes.length>=50?closes.slice(-50).reduce((a,b)=>a+b,0)/50:0;
+    const ma200=closes.length>=200?closes.slice(-200).reduce((a,b)=>a+b,0)/200:0;
+    let rsi14=50;
+    if(closes.length>=15){
+      let gains=0,losses=0;
+      for(let i=closes.length-14;i<closes.length;i++){const d=closes[i]-closes[i-1];if(d>0)gains+=d;else losses-=d;}
+      rsi14=losses===0?100:100-(100/(1+(gains/14)/(losses/14)));
+    }
+    const dailyReturn=prev>0?(price-prev)/prev*100:0;
+    const wtdReturn=weekOpen&&weekOpen!==price?(price-weekOpen)/weekOpen*100:0;
+    const monthlyReturn=monthOpen&&monthOpen!==price?(price-monthOpen)/monthOpen*100:0;
+    return {price,prev,weekOpen,monthOpen,ma50,ma200,rsi14,closes,dailyReturn,wtdReturn,monthlyReturn};
   }
 
   // Race all proxies — first valid response wins
