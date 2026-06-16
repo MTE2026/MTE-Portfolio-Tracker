@@ -543,6 +543,17 @@ async function syncFromServer(){
       if(data.locked) Object.assign(S.lockedMonths, data.locked);
       if(data.blends && Object.keys(data.blends).length) S.blends = data.blends;
       if(data.costBasis && Object.keys(data.costBasis).length) Object.assign(S.costBasis, data.costBasis);
+      // Merge watchlists from server
+      if(data.etfWatch && Array.isArray(data.etfWatch)){
+        const local=JSON.parse(localStorage.getItem('mte_etf_watch')||'[]');
+        const merged=[...new Set([...local,...data.etfWatch])];
+        localStorage.setItem('mte_etf_watch',JSON.stringify(merged));
+      }
+      if(data.stkWatch && Array.isArray(data.stkWatch)){
+        const local=JSON.parse(localStorage.getItem('mte_stk_watch')||'[]');
+        const merged=[...new Set([...local,...data.stkWatch])];
+        localStorage.setItem('mte_stk_watch',JSON.stringify(merged));
+      }
       // Always merge SEED_MAY29 as base so mobile always has anchor prices
       S.monthEndPrices = {...SEED_MAY29, ...S.monthEndPrices};
       if(data.monthEndPrices && Object.keys(data.monthEndPrices).length){
@@ -601,6 +612,11 @@ function parseASQuote(ticker, q) {
   if (!q || !q.success) return {price:0,prev:0,weekOpen:0,monthOpen:0,dailyReturn:null,wtdReturn:null,monthlyReturn:null};
   const price = q.price || 0;
   const prev = q.prevClose || price;
+
+  // Always recalculate daily from price vs prevClose — never trust regularMarketChangePercent
+  // from Yahoo as it sometimes returns YTD or incorrect values for ETFs
+  const dailyReturn = prev > 0 ? (price - prev) / prev * 100 : 0;
+
   let weekOpen = price, monthOpen = price;
   if (q.closes && q.timestamps && q.closes.length > 1) {
     const closes = q.closes, ts = q.timestamps;
@@ -620,10 +636,9 @@ function parseASQuote(ticker, q) {
       monthOpen = price / (1 + q.monthlyReturn/100);
     if (monthOpen === price && prev > 0) monthOpen = prev;
   }
-  // Store AS-provided returns directly — more accurate than recalculating
   return {
     price, prev, weekOpen, monthOpen,
-    dailyReturn: q.dailyReturn,
+    dailyReturn,
     wtdReturn: q.wtdReturn,
     monthlyReturn: q.monthlyReturn,
     ma50: q.ma50||0,
@@ -667,21 +682,31 @@ async function loadPrices() {
 async function refreshPrices() { await loadPrices(); }
 
 async function fetchPriceDirect(ticker) {
-  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=6mo`;
+  // Use 2y range to get enough history for 200-DMA (needs 200+ trading days)
+  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=2y`;
   const proxyUrls = [
     `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
     `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`,
-    `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=6mo`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=6mo`,
+    `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=2y`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=2y`,
   ];
 
   function parseYahoo(d){
     if(!d?.chart?.result?.[0]) return null;
     const meta=d.chart.result[0].meta;
-    const closes=d.chart.result[0].indicators.quote[0].close.filter(x=>x!=null);
-    const ts=d.chart.result[0].timestamp;
+    const rawCloses=d.chart.result[0].indicators.quote[0].close;
+    const rawTs=d.chart.result[0].timestamp;
+    // Filter nulls but keep paired closes+timestamps
+    const pairs=rawTs.map((t,i)=>({t,c:rawCloses[i]})).filter(x=>x.c!=null);
+    const closes=pairs.map(x=>x.c);
+    const ts=pairs.map(x=>x.t);
+    if(!closes.length) return null;
+
+    // Live price from meta, fallback to last close
     const price=meta.regularMarketPrice||closes[closes.length-1];
-    const prev=meta.chartPreviousClose||closes[closes.length-2]||price;
+    // Previous close — use meta field (most reliable), fallback to second-to-last close
+    const prev=meta.chartPreviousClose||meta.previousClose||closes[closes.length-2]||price;
+
     const now=new Date(); const dow=now.getDay();
     const daysToMon=dow===0?6:dow-1;
     const monDate=new Date(now); monDate.setDate(now.getDate()-daysToMon); monDate.setHours(0,0,0,0);
@@ -692,15 +717,31 @@ async function fetchPriceDirect(ticker) {
       if(d2>=monDate) weekOpen=closes[i-1]||weekOpen;
       if(d2>=monthStart) monthOpen=closes[i-1]||monthOpen;
     }
+
     const ma50=closes.length>=50?closes.slice(-50).reduce((a,b)=>a+b,0)/50:0;
-    const ma200=closes.length>=200?closes.slice(-200).reduce((a,b)=>a+b,0)/200:0;
+    // 200-DMA now available since we fetch 2y (~500 trading days)
+    const ma200=closes.length>=200?closes.slice(-200).reduce((a,b)=>a+b,0)/200:
+                closes.length>=100?closes.reduce((a,b)=>a+b,0)/closes.length:0; // partial if <200
+
+    // RSI-14 using Wilder's smoothing
     let rsi14=50;
     if(closes.length>=15){
-      let gains=0,losses=0;
-      for(let i=closes.length-14;i<closes.length;i++){const d=closes[i]-closes[i-1];if(d>0)gains+=d;else losses-=d;}
-      rsi14=losses===0?100:100-(100/(1+(gains/14)/(losses/14)));
+      let avgGain=0,avgLoss=0;
+      for(let i=closes.length-14;i<closes.length;i++){
+        const chg=closes[i]-closes[i-1];
+        if(chg>0) avgGain+=chg; else avgLoss-=chg;
+      }
+      avgGain/=14; avgLoss/=14;
+      rsi14=avgLoss===0?100:100-(100/(1+avgGain/avgLoss));
     }
-    const dailyReturn=prev>0?(price-prev)/prev*100:0;
+
+    // Daily return: use meta regularMarketChangePercent if available (most accurate)
+    let dailyReturn;
+    if(meta.regularMarketChangePercent!=null) {
+      dailyReturn=meta.regularMarketChangePercent;
+    } else {
+      dailyReturn=prev>0?(price-prev)/prev*100:0;
+    }
     const wtdReturn=weekOpen&&weekOpen!==price?(price-weekOpen)/weekOpen*100:0;
     const monthlyReturn=monthOpen&&monthOpen!==price?(price-monthOpen)/monthOpen*100:0;
     return {price,prev,weekOpen,monthOpen,ma50,ma200,rsi14,closes,dailyReturn,wtdReturn,monthlyReturn};
@@ -710,19 +751,20 @@ async function fetchPriceDirect(ticker) {
   return new Promise(resolve=>{
     let resolved=false;
     let failed=0;
+    const empty={price:0,prev:0,weekOpen:0,monthOpen:0,ma50:0,ma200:0,rsi14:50,closes:[],dailyReturn:0,wtdReturn:0,monthlyReturn:0};
     proxyUrls.forEach(url=>{
       fetch(url).then(r=>r.ok?r.json():null).then(d=>{
         if(resolved) return;
         const parsed=parseYahoo(d);
         if(parsed){ resolved=true; resolve(parsed); }
-        else { failed++; if(failed===proxyUrls.length) resolve({price:0,prev:0,weekOpen:0,monthOpen:0}); }
+        else { failed++; if(failed===proxyUrls.length) resolve(empty); }
       }).catch(()=>{
         failed++;
-        if(failed===proxyUrls.length) resolve({price:0,prev:0,weekOpen:0,monthOpen:0});
+        if(failed===proxyUrls.length) resolve(empty);
       });
     });
-    // Overall timeout 12 seconds
-    setTimeout(()=>{ if(!resolved){ resolved=true; resolve({price:0,prev:0,weekOpen:0,monthOpen:0}); } },12000);
+    // Overall timeout 15 seconds (2y fetch is larger)
+    setTimeout(()=>{ if(!resolved){ resolved=true; resolve(empty); } },15000);
   });
 }
 
@@ -871,13 +913,17 @@ async function syncHistoricalToServer(){
   const btn = document.getElementById('sync-btn');
   btn.textContent = '⏳ Syncing…'; btn.disabled = true;
   try {
+    const etfWatch=JSON.parse(localStorage.getItem('mte_etf_watch')||'[]');
+    const stkWatch=JSON.parse(localStorage.getItem('mte_stk_watch')||'[]');
     const params = new URLSearchParams({
       action: 'saveReturnsData',
       returns: JSON.stringify(S.returns),
       locked: JSON.stringify(S.lockedMonths),
       mep: JSON.stringify(S.monthEndPrices),
       blends: JSON.stringify(S.blends),
-      costBasis: JSON.stringify(S.costBasis)
+      costBasis: JSON.stringify(S.costBasis),
+      etfWatch: JSON.stringify(etfWatch),
+      stkWatch: JSON.stringify(stkWatch)
     });
     const r = await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
     const data = await r.json();
@@ -1973,7 +2019,7 @@ function scannerRow(ticker, type){
   const maStatus=(ma,lbl)=>ma>0?`<span class="ma-bar ${price>ma?'ma-above':'ma-below'}"></span>${lbl}: $${ma.toFixed(0)}`:'—';
   const alertHtml=alerts.length?`<div style="margin-top:4px;">${alerts.map(a=>`<span style="font-size:10px;color:var(--orange);display:block;">${a}</span>`).join('')}</div>`:'';
 
-  const isSeed = type==='etf'?SEED_ETFS.includes(ticker):SEED_STOCKS.includes(ticker);
+  const isSeed = (type==='etf'?SEED_ETFS.includes(ticker):SEED_STOCKS.includes(ticker)) && SCANNER.tab!=='watchlist';
 
   return `<tr>
     <td style="font-weight:700;color:var(--blue);cursor:pointer;" onclick="openResearch('${ticker}')">${ticker}${alerts.length?'<span class="alert-dot"></span>':''}</td>
@@ -2068,6 +2114,19 @@ function setScannerTab(tab){
   renderScanner();
 }
 
+async function pushWatchlistToServer(type){
+  try {
+    const etfWatch=JSON.parse(localStorage.getItem('mte_etf_watch')||'[]');
+    const stkWatch=JSON.parse(localStorage.getItem('mte_stk_watch')||'[]');
+    const params=new URLSearchParams({
+      action:'saveWatchlist',
+      etfWatch:JSON.stringify(etfWatch),
+      stkWatch:JSON.stringify(stkWatch)
+    });
+    await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
+  } catch(e){}
+}
+
 function addScannerTicker(type){
   const inp=document.getElementById('scanner-add-inp');
   const ticker=(inp.value||'').trim().toUpperCase().replace(/[^A-Z0-9.\-^]/g,'');
@@ -2078,9 +2137,16 @@ function addScannerTicker(type){
   localStorage.setItem(watchKey,JSON.stringify(list));
   inp.value='';
   SCANNER.tab='watchlist';
+  pushWatchlistToServer(type);
   renderScanner();
-  // Load price for new ticker
-  fetchPriceDirect(ticker).then(p=>{ S.prices[ticker]=p; renderScanner(); });
+  // Load price for new ticker via Apps Script (best quality), fallback to direct
+  fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(ticker)}`)
+    .then(r=>r.ok?r.json():null)
+    .then(asData=>{
+      if(asData&&asData[ticker]&&asData[ticker].success){ S.prices[ticker]=parseASQuote(ticker,asData[ticker]); renderScanner(); }
+      else return fetchPriceDirect(ticker).then(p=>{ S.prices[ticker]=p; renderScanner(); });
+    })
+    .catch(()=>fetchPriceDirect(ticker).then(p=>{ S.prices[ticker]=p; renderScanner(); }));
 }
 
 function removeScannerTicker(ticker,type){
@@ -2088,6 +2154,7 @@ function removeScannerTicker(ticker,type){
   let list=JSON.parse(localStorage.getItem(watchKey)||'[]');
   list=list.filter(t=>t!==ticker);
   localStorage.setItem(watchKey,JSON.stringify(list));
+  pushWatchlistToServer(type);
   renderScanner();
 }
 
