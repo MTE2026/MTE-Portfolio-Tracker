@@ -197,7 +197,35 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .modal-ok { flex: 1; padding: 8px; background: var(--navy); color: white; border: none; border-radius: var(--radius-sm); font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit; }
 .modal-cancel { flex: 1; padding: 8px; background: var(--bg); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; font-family: inherit; }
 
-/* RESEARCH MODAL */
+/* SCANNER */
+.scanner-tbl { width:100%;border-collapse:collapse;font-size:12px; }
+.scanner-tbl th { padding:8px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--text-3);letter-spacing:0.07em;text-transform:uppercase;border-bottom:1px solid var(--border);background:#FAFBFC;white-space:nowrap; }
+.scanner-tbl th.r { text-align:right; }
+.scanner-tbl td { padding:9px 12px;border-bottom:1px solid var(--border-light);vertical-align:middle; }
+.scanner-tbl td.r { text-align:right; }
+.scanner-tbl tr:last-child td { border-bottom:none; }
+.scanner-tbl tr:hover { background:#F8F9FA; }
+.sig-badge { display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap; }
+.sig-bull { background:#EAF3DE;color:#2E6B0E; }
+.sig-caut { background:#FFF3E0;color:#E65100; }
+.sig-exit { background:#FCEBEB;color:#A32D2D; }
+.sig-alert { background:#E8F4FD;color:#0D47A1; }
+.sig-ob { background:#FFF3E0;color:#E65100; }
+.sig-os { background:#EAF3DE;color:#2E6B0E; }
+.ma-bar { display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:2px; }
+.ma-above { background:var(--green); }
+.ma-below { background:var(--red); }
+.scanner-tabs { display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:0; }
+.scanner-tab { padding:10px 18px;font-size:13px;font-weight:600;cursor:pointer;border:none;background:none;font-family:inherit;color:var(--text-2);border-bottom:2px solid transparent; }
+.scanner-tab.active { color:var(--navy);border-bottom-color:var(--navy); }
+.watchlist-add { display:flex;gap:8px;padding:12px 16px;background:#F8F9FA;border-bottom:1px solid var(--border); }
+.watchlist-inp { flex:1;padding:7px 11px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit; }
+.watchlist-inp:focus { outline:none;border-color:var(--blue); }
+.remove-btn { background:none;border:none;cursor:pointer;color:var(--text-3);font-size:14px;padding:2px 6px; }
+.remove-btn:hover { color:var(--red); }
+.alert-dot { width:8px;height:8px;border-radius:50%;background:var(--orange);display:inline-block;margin-left:4px;animation:pulse 1.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.3} }
+@media(max-width:768px){ .scanner-tbl { min-width:600px; } }
 .res-tab { padding:10px 18px;border:none;background:none;cursor:pointer;font-size:13px;font-family:inherit;color:var(--text-2);border-bottom:2px solid transparent;white-space:nowrap;transition:all 0.12s; }
 .res-tab:hover { color:var(--text); }
 .res-tab.active { color:var(--navy);font-weight:700;border-bottom-color:var(--navy); }
@@ -322,6 +350,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
   </div>
   <div class="sb-nav">
     <div class="sb-nav-item active" id="nav-ov" onclick="showOverview()">▦ &nbsp;Portfolio Overview</div>
+    <div class="sb-nav-item" id="nav-etf" onclick="showScanner('etf')">📊 &nbsp;ETF Scanner</div>
+    <div class="sb-nav-item" id="nav-stk" onclick="showScanner('stock')">📈 &nbsp;Stock Scanner</div>
   </div>
   <button class="sb-add" onclick="addModelUI()">+ Add New Model</button>
   <div class="sb-section">Benchmarks</div>
@@ -881,6 +911,8 @@ function renderSidebar(){
       <div class="sb-model-sub">Blended</div>
     </div>`).join('');
   document.getElementById('nav-ov').className='sb-nav-item'+(S.activeView==='overview'?' active':'');
+  document.getElementById('nav-etf').className='sb-nav-item'+(S.activeView==='scanner'&&SCANNER.type==='etf'?' active':'');
+  document.getElementById('nav-stk').className='sb-nav-item'+(S.activeView==='scanner'&&SCANNER.type==='stock'?' active':'');
 }
 
 function showBenchmark(ticker){
@@ -900,6 +932,8 @@ function showOverview(){
   document.getElementById('tb-title').textContent='Portfolio Overview';
   document.getElementById('tb-sub').textContent=`${S.models.length} models · Live prices · MTE Internal`;
   document.getElementById('back-btn').style.display='none';
+  document.getElementById('nav-etf').className='sb-nav-item';
+  document.getElementById('nav-stk').className='sb-nav-item';
   closeSidebar();
   renderSidebar(); renderOverview();
 }
@@ -1772,6 +1806,196 @@ function renderBacktest(period){
       </table>
     </div>
   </div>`;
+}
+
+// ━━━ SCANNER ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const SEED_ETFS = ['SCHG','SPMO','CGDV','VTV','IBIT','IAU','SLV','XME','GLTR','EETH','IDMO','FEZ','DFIV','AVEM','XMMO','XSMO','ARKK','CHAT','FBOT','SHLD','HDV','SETM','PDBC','IGV','XLF','BAR','BITQ','FCG','NLR','REMX','QTUM','SPHY','FEPI','IVES','GDX','JEPQ','BOXX','XLE','IGF','GRNY','BIL','SCYB','GLD','XLK','SOXX','EFV','INDA','TLT','SSK','GLXY','XRPT','BMNR','BTCI','FYC','IWM','QQQ','SPY','KWEB','FXI','NODE','USDU'];
+const SEED_STOCKS = ['CRWD','AVGO','GOOGL','CAT','NVDA','DELL','AAPL','GS','AMZN','META','MSFT','LLY','ORCL','COST','UBER','TOL','EME','TSLA','IRM','LIN','COIN','BSX','LRCX','ANET','RTX','APH','RKLB','TT','WMT','PLTR','NFLX','SHOP','AXON','SOFI','SNOW','CLS','UPST','PINS','ZS','ADSK','AMD','MU','ADBE','NTRA','NOW','NTES','KC','BABA','TME','YMM','TSM','TCOM','JD'];
+
+let SCANNER = { type:'etf', tab:'portfolio' };
+
+function getScannerList(type){
+  const seed = type==='etf'?SEED_ETFS:SEED_STOCKS;
+  const watchKey = type==='etf'?'mte_etf_watch':'mte_stk_watch';
+  const watch = JSON.parse(localStorage.getItem(watchKey)||'[]');
+  return { portfolio:[...new Set(seed)], watchlist:[...new Set(watch)] };
+}
+
+function getSignal(p, prev){
+  if(!p||!p.price) return {label:'No data',cls:'sig-caut',alerts:[]};
+  const price=p.price;
+  const ma50=p.ma50||0, ma200=p.ma200||0;
+  // Calculate 21-EMA from closes if available
+  const closes=p.closes||[];
+  let ema21=0;
+  if(closes.length>=21){
+    const k=2/22;
+    ema21=closes.slice(0,21).reduce((a,b)=>a+b,0)/21;
+    for(let i=21;i<closes.length;i++) ema21=closes[i]*k+ema21*(1-k);
+  }
+  const rsi=p.rsi14||50;
+  const alerts=[];
+
+  // Reclaim alert — was below all MAs, now above any
+  if(prev){
+    const wasBelow21=prev.price<(prev.ema21||ema21*1.01);
+    const wasBelow50=prev.price<(prev.ma50||ma50*1.01);
+    const wasBelow200=prev.price<(prev.ma200||ma200*1.01);
+    const wasAllBelow=wasBelow21&&wasBelow50&&wasBelow200;
+    if(wasAllBelow){
+      if(price>ema21&&prev.price<=ema21) alerts.push('🔔 Reclaimed 21-EMA');
+      if(price>ma50&&prev.price<=ma50) alerts.push('🔔 Reclaimed 50-DMA');
+      if(price>ma200&&prev.price<=ma200) alerts.push('🔔 Reclaimed 200-DMA');
+    }
+    // Breakdown alerts
+    if(prev.price>ema21&&price<=ema21) alerts.push('⚡ Broke 21-EMA');
+    if(prev.price>ma50&&price<=ma50) alerts.push('⚡ Broke 50-DMA');
+    if(prev.price>ma200&&price<=ma200) alerts.push('⚡ Broke 200-DMA');
+  }
+
+  // RSI signals
+  let rsiSig='';
+  if(rsi>70) rsiSig='⚠ Overbought';
+  else if(rsi<30) rsiSig='🟢 Oversold';
+
+  // Main signal
+  let label,cls;
+  if(price>ma50&&price>ma200){
+    if(rsi>=50&&rsi<=70){ label='✅ Strong Momentum'; cls='sig-bull'; }
+    else { label='✅ Bullish — Hold'; cls='sig-bull'; }
+  } else if(price>ma200&&price<=ma50){
+    label='⚠ Caution — Watch'; cls='sig-caut';
+  } else {
+    label='🔴 Exit — Reduce'; cls='sig-exit';
+  }
+
+  if(rsiSig) alerts.unshift(rsiSig);
+  return {label,cls,alerts,ema21,rsi};
+}
+
+function scannerRow(ticker, type){
+  const p = S.prices[ticker];
+  if(!p||!p.price) return `<tr>
+    <td style="font-weight:700;color:var(--blue);">${ticker}</td>
+    <td colspan="9" style="color:var(--text-3);font-size:12px;">Loading…</td>
+    <td><button class="remove-btn" onclick="removeScannerTicker('${ticker}','${type}')">✕</button></td>
+  </tr>`;
+
+  const price=p.price;
+  const ma50=p.ma50||0, ma200=p.ma200||0;
+  const {label,cls,alerts,ema21,rsi}=getSignal(p,null);
+  const d=dRet(ticker);
+  const ytd=benchYTD(ticker)||0;
+  const spyYTD=benchYTD('SPY')||0;
+  const alpha=ytd-spyYTD;
+
+  const maStatus=(ma,lbl)=>ma>0?`<span class="ma-bar ${price>ma?'ma-above':'ma-below'}"></span>${lbl}: $${ma.toFixed(0)}`:'—';
+  const alertHtml=alerts.length?`<div style="margin-top:4px;">${alerts.map(a=>`<span style="font-size:10px;color:var(--orange);display:block;">${a}</span>`).join('')}</div>`:'';
+
+  const isSeed = type==='etf'?SEED_ETFS.includes(ticker):SEED_STOCKS.includes(ticker);
+
+  return `<tr>
+    <td style="font-weight:700;color:var(--blue);cursor:pointer;" onclick="openResearch('${ticker}')">${ticker}${alerts.length?'<span class="alert-dot"></span>':''}</td>
+    <td class="r">$${price.toFixed(2)}</td>
+    <td class="r ${cls2(d)}">${pct(d)}</td>
+    <td class="r ${cls2(ytd)}">${pct(ytd)}</td>
+    <td class="r ${cls2(alpha)}">${pct(alpha)}</td>
+    <td class="r" style="font-size:11px;">${ema21>0?`$${ema21.toFixed(0)} <span style="color:${price>ema21?'var(--green)':'var(--red)'}; font-size:10px;">(${((price-ema21)/ema21*100).toFixed(1)}%)</span>`:'—'}</td>
+    <td class="r" style="font-size:11px;">${ma50>0?`$${ma50.toFixed(0)} <span style="color:${price>ma50?'var(--green)':'var(--red)'}; font-size:10px;">(${((price-ma50)/ma50*100).toFixed(1)}%)</span>`:'—'}</td>
+    <td class="r" style="font-size:11px;">${ma200>0?`$${ma200.toFixed(0)} <span style="color:${price>ma200?'var(--green)':'var(--red)'}; font-size:10px;">(${((price-ma200)/ma200*100).toFixed(1)}%)</span>`:'—'}</td>
+    <td class="r" style="font-size:11px;color:${rsi>70?'var(--red)':rsi<30?'var(--green)':'var(--text-2)'};">${rsi.toFixed(0)}</td>
+    <td><span class="sig-badge ${cls}">${label}</span>${alertHtml}</td>
+    <td>${isSeed?'':`<button class="remove-btn" onclick="removeScannerTicker('${ticker}','${type}')">✕</button>`}</td>
+  </tr>`;
+}
+
+function cls2(v){ return v>0.005?'pos':v<-0.005?'neg':'neu'; }
+
+function showScanner(type){
+  SCANNER.type=type; SCANNER.tab='portfolio';
+  S.activeView='scanner'; S.activeModel=null;
+  document.getElementById('tb-title').textContent=type==='etf'?'ETF Scanner':'Stock Scanner';
+  document.getElementById('tb-sub').textContent='Technical signals & action recommendations';
+  document.getElementById('back-btn').style.display='none';
+  closeSidebar();
+  // Update sidebar active state
+  document.getElementById('nav-ov').className='sb-nav-item';
+  document.getElementById('nav-etf').className='sb-nav-item'+(type==='etf'?' active':'');
+  document.getElementById('nav-stk').className='sb-nav-item'+(type==='stock'?' active':'');
+  renderScanner();
+}
+
+function renderScanner(){
+  const type=SCANNER.type;
+  const {portfolio,watchlist}=getScannerList(type);
+  const list=SCANNER.tab==='portfolio'?portfolio:watchlist;
+
+  const tableHTML=`<div class="tbl-scroll"><table class="scanner-tbl">
+    <thead><tr>
+      <th>Ticker</th>
+      <th class="r">Price</th>
+      <th class="r">Daily</th>
+      <th class="r">YTD</th>
+      <th class="r">Alpha vs SPY</th>
+      <th class="r">21-EMA</th>
+      <th class="r">50-DMA</th>
+      <th class="r">200-DMA</th>
+      <th class="r">RSI</th>
+      <th>Signal</th>
+      <th></th>
+    </tr></thead>
+    <tbody>${list.map(t=>scannerRow(t,type)).join('')}</tbody>
+  </table></div>`;
+
+  const watchKey=type==='etf'?'mte_etf_watch':'mte_stk_watch';
+
+  document.getElementById('content').innerHTML=`
+  <div class="sec-card" style="overflow:hidden;">
+    <div class="scanner-tabs">
+      <button class="scanner-tab ${SCANNER.tab==='portfolio'?'active':''}" onclick="setScannerTab('portfolio')">
+        In Portfolio (${portfolio.length})
+      </button>
+      <button class="scanner-tab ${SCANNER.tab==='watchlist'?'active':''}" onclick="setScannerTab('watchlist')">
+        Watchlist (${watchlist.length})
+      </button>
+    </div>
+    <div class="watchlist-add">
+      <input class="watchlist-inp" id="scanner-add-inp" placeholder="Add ticker (e.g. MSFT)" 
+        onkeydown="if(event.key==='Enter')addScannerTicker('${type}')">
+      <button class="btn btn-navy" onclick="addScannerTicker('${type}')" style="padding:7px 14px;font-size:12px;">+ Add</button>
+    </div>
+    ${list.length?tableHTML:`<div style="padding:40px;text-align:center;color:var(--text-3);">
+      ${SCANNER.tab==='portfolio'?'No tickers loaded.':'Watchlist empty — add tickers above.'}
+    </div>`}
+  </div>`;
+}
+
+function setScannerTab(tab){
+  SCANNER.tab=tab;
+  renderScanner();
+}
+
+function addScannerTicker(type){
+  const inp=document.getElementById('scanner-add-inp');
+  const ticker=inp.value.trim().toUpperCase();
+  if(!ticker) return;
+  const watchKey=type==='etf'?'mte_etf_watch':'mte_stk_watch';
+  const list=JSON.parse(localStorage.getItem(watchKey)||'[]');
+  if(!list.includes(ticker)) list.push(ticker);
+  localStorage.setItem(watchKey,JSON.stringify(list));
+  SCANNER.tab='watchlist';
+  inp.value='';
+  renderScanner();
+  // Load price for new ticker
+  fetchPriceDirect(ticker).then(p=>{ S.prices[ticker]=p; renderScanner(); });
+}
+
+function removeScannerTicker(ticker,type){
+  const watchKey=type==='etf'?'mte_etf_watch':'mte_stk_watch';
+  let list=JSON.parse(localStorage.getItem(watchKey)||'[]');
+  list=list.filter(t=>t!==ticker);
+  localStorage.setItem(watchKey,JSON.stringify(list));
+  renderScanner();
 }
 
 init();
