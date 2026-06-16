@@ -2015,7 +2015,11 @@ function renderScanner(){
   const missing=[...new Set([...list,'SPY'])].filter(t=>!DEC31_CACHE[t]);
   if(missing.length){
     fetchDec31Prices(missing).then(()=>{
-      if(S.activeView==='scanner') renderScanner();
+      // Only re-render if user is not currently typing in the input
+      const inp = document.getElementById('scanner-add-inp');
+      if(!inp || document.activeElement !== inp){
+        if(S.activeView==='scanner') renderScanner();
+      }
     });
   }
 
@@ -2066,14 +2070,14 @@ function setScannerTab(tab){
 
 function addScannerTicker(type){
   const inp=document.getElementById('scanner-add-inp');
-  const ticker=inp.value.trim().toUpperCase();
+  const ticker=(inp.value||'').trim().toUpperCase().replace(/[^A-Z0-9.\-^]/g,'');
   if(!ticker) return;
   const watchKey=type==='etf'?'mte_etf_watch':'mte_stk_watch';
   const list=JSON.parse(localStorage.getItem(watchKey)||'[]');
   if(!list.includes(ticker)) list.push(ticker);
   localStorage.setItem(watchKey,JSON.stringify(list));
-  SCANNER.tab='watchlist';
   inp.value='';
+  SCANNER.tab='watchlist';
   renderScanner();
   // Load price for new ticker
   fetchPriceDirect(ticker).then(p=>{ S.prices[ticker]=p; renderScanner(); });
