@@ -1828,6 +1828,39 @@ const SEED_ETFS = ['SCHG','SPMO','CGDV','VTV','IBIT','IAU','SLV','XME','GLTR','E
 const SEED_STOCKS = ['CRWD','AVGO','GOOGL','CAT','NVDA','DELL','AAPL','GS','AMZN','META','MSFT','LLY','ORCL','COST','UBER','TOL','EME','TSLA','IRM','LIN','COIN','BSX','LRCX','ANET','RTX','APH','RKLB','TT','WMT','PLTR','NFLX','SHOP','AXON','SOFI','SNOW','CLS','UPST','PINS','ZS','ADSK','AMD','MU','ADBE','NTRA','NOW','NTES','KC','BABA','TME','YMM','TSM','TCOM','JD'];
 
 let SCANNER = { type:'etf', tab:'portfolio' };
+const DEC31_CACHE = {}; // ticker -> Dec 31 2025 closing price
+
+async function fetchDec31Prices(tickers){
+  // Batch fetch Dec31 2025 prices via Apps Script
+  try {
+    const r = await fetch(`${APPS_SCRIPT_URL}?action=getDec31Prices&tickers=${encodeURIComponent(tickers.join(','))}`);
+    if(r.ok){
+      const data = await r.json();
+      Object.entries(data).forEach(([t,price])=>{ if(price) DEC31_CACHE[t]=price; });
+      return;
+    }
+  } catch(e){}
+  // Fallback: fetch individually via proxy
+  await Promise.all(tickers.map(t=>fetchDec31Price(t)));
+}
+
+async function fetchDec31Price(ticker){
+  if(DEC31_CACHE[ticker]) return DEC31_CACHE[ticker];
+  const urls = [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/'+ticker+'?interval=1d&period1=1767139200&period2=1767312000')}`,
+    `https://corsproxy.io/?${encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/'+ticker+'?interval=1d&period1=1767139200&period2=1767312000')}`
+  ];
+  for(const url of urls){
+    try {
+      const r = await fetch(url);
+      if(!r.ok) continue;
+      const d = await r.json();
+      const closes = d?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x=>x!=null);
+      if(closes&&closes.length>0){ DEC31_CACHE[ticker]=closes[closes.length-1]; return DEC31_CACHE[ticker]; }
+    } catch(e){}
+  }
+  return null;
+}
 
 function getScannerList(type){
   const seed = type==='etf'?SEED_ETFS:SEED_STOCKS;
@@ -1900,9 +1933,14 @@ function scannerRow(ticker, type){
   const ma50=p.ma50||0, ma200=p.ma200||0;
   const {label,cls,alerts,ema21,rsi}=getSignal(p,null);
   const d=dRet(ticker);
-  const ytd=benchYTD(ticker)||0;
-  const spyYTD=benchYTD('SPY')||0;
-  const alpha=ytd-spyYTD;
+  // True YTD from Dec 31 2025 close
+  const dec31 = DEC31_CACHE[ticker];
+  const p = S.prices[ticker];
+  const ytd = dec31&&p&&dec31>0?(p.price-dec31)/dec31*100:null;
+  const spyDec31 = DEC31_CACHE['SPY'];
+  const spyP = S.prices['SPY'];
+  const spyYTD = spyDec31&&spyP&&spyDec31>0?(spyP.price-spyDec31)/spyDec31*100:null;
+  const alpha = ytd!=null&&spyYTD!=null?ytd-spyYTD:null;
 
   const maStatus=(ma,lbl)=>ma>0?`<span class="ma-bar ${price>ma?'ma-above':'ma-below'}"></span>${lbl}: $${ma.toFixed(0)}`:'—';
   const alertHtml=alerts.length?`<div style="margin-top:4px;">${alerts.map(a=>`<span style="font-size:10px;color:var(--orange);display:block;">${a}</span>`).join('')}</div>`:'';
@@ -1913,8 +1951,8 @@ function scannerRow(ticker, type){
     <td style="font-weight:700;color:var(--blue);cursor:pointer;" onclick="openResearch('${ticker}')">${ticker}${alerts.length?'<span class="alert-dot"></span>':''}</td>
     <td class="r">$${price.toFixed(2)}</td>
     <td class="r ${cls2(d)}">${pct(d)}</td>
-    <td class="r ${cls2(ytd)}">${pct(ytd)}</td>
-    <td class="r ${cls2(alpha)}">${pct(alpha)}</td>
+    <td class="r ${ytd!=null?cls2(ytd):'neu'}">${ytd!=null?pct(ytd):'Loading…'}</td>
+    <td class="r ${alpha!=null?cls2(alpha):'neu'}">${alpha!=null?pct(alpha):'—'}</td>
     <td class="r" style="font-size:11px;">${ema21>0?`$${ema21.toFixed(0)} <span style="color:${price>ema21?'var(--green)':'var(--red)'}; font-size:10px;">(${((price-ema21)/ema21*100).toFixed(1)}%)</span>`:'—'}</td>
     <td class="r" style="font-size:11px;">${ma50>0?`$${ma50.toFixed(0)} <span style="color:${price>ma50?'var(--green)':'var(--red)'}; font-size:10px;">(${((price-ma50)/ma50*100).toFixed(1)}%)</span>`:'—'}</td>
     <td class="r" style="font-size:11px;">${ma200>0?`$${ma200.toFixed(0)} <span style="color:${price>ma200?'var(--green)':'var(--red)'}; font-size:10px;">(${((price-ma200)/ma200*100).toFixed(1)}%)</span>`:'—'}</td>
@@ -1944,6 +1982,12 @@ function renderScanner(){
   const type=SCANNER.type;
   const {portfolio,watchlist}=getScannerList(type);
   const list=SCANNER.tab==='portfolio'?portfolio:watchlist;
+
+  // Fetch Dec31 2025 prices for tickers not yet cached
+  const missing=[...new Set([...list,'SPY'])].filter(t=>!DEC31_CACHE[t]);
+  if(missing.length){
+    fetchDec31Prices(missing).then(()=>renderScanner());
+  }
 
   const tableHTML=`<div class="tbl-scroll"><table class="scanner-tbl">
     <thead><tr>
