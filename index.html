@@ -197,7 +197,35 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
 .modal-ok { flex: 1; padding: 8px; background: var(--navy); color: white; border: none; border-radius: var(--radius-sm); font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit; }
 .modal-cancel { flex: 1; padding: 8px; background: var(--bg); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; cursor: pointer; font-family: inherit; }
 
-/* RESEARCH MODAL */
+/* SCANNER */
+.scanner-tbl { width:100%;border-collapse:collapse;font-size:12px; }
+.scanner-tbl th { padding:8px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--text-3);letter-spacing:0.07em;text-transform:uppercase;border-bottom:1px solid var(--border);background:#FAFBFC;white-space:nowrap; }
+.scanner-tbl th.r { text-align:right; }
+.scanner-tbl td { padding:9px 12px;border-bottom:1px solid var(--border-light);vertical-align:middle; }
+.scanner-tbl td.r { text-align:right; }
+.scanner-tbl tr:last-child td { border-bottom:none; }
+.scanner-tbl tr:hover { background:#F8F9FA; }
+.sig-badge { display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap; }
+.sig-bull { background:#EAF3DE;color:#2E6B0E; }
+.sig-caut { background:#FFF3E0;color:#E65100; }
+.sig-exit { background:#FCEBEB;color:#A32D2D; }
+.sig-alert { background:#E8F4FD;color:#0D47A1; }
+.sig-ob { background:#FFF3E0;color:#E65100; }
+.sig-os { background:#EAF3DE;color:#2E6B0E; }
+.ma-bar { display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:2px; }
+.ma-above { background:var(--green); }
+.ma-below { background:var(--red); }
+.scanner-tabs { display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:0; }
+.scanner-tab { padding:10px 18px;font-size:13px;font-weight:600;cursor:pointer;border:none;background:none;font-family:inherit;color:var(--text-2);border-bottom:2px solid transparent; }
+.scanner-tab.active { color:var(--navy);border-bottom-color:var(--navy); }
+.watchlist-add { display:flex;gap:8px;padding:12px 16px;background:#F8F9FA;border-bottom:1px solid var(--border); }
+.watchlist-inp { flex:1;padding:7px 11px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit; }
+.watchlist-inp:focus { outline:none;border-color:var(--blue); }
+.remove-btn { background:none;border:none;cursor:pointer;color:var(--text-3);font-size:14px;padding:2px 6px; }
+.remove-btn:hover { color:var(--red); }
+.alert-dot { width:8px;height:8px;border-radius:50%;background:var(--orange);display:inline-block;margin-left:4px;animation:pulse 1.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.3} }
+@media(max-width:768px){ .scanner-tbl { min-width:600px; } }
 .res-tab { padding:10px 18px;border:none;background:none;cursor:pointer;font-size:13px;font-family:inherit;color:var(--text-2);border-bottom:2px solid transparent;white-space:nowrap;transition:all 0.12s; }
 .res-tab:hover { color:var(--text); }
 .res-tab.active { color:var(--navy);font-weight:700;border-bottom-color:var(--navy); }
@@ -322,6 +350,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
   </div>
   <div class="sb-nav">
     <div class="sb-nav-item active" id="nav-ov" onclick="showOverview()">▦ &nbsp;Portfolio Overview</div>
+    <div class="sb-nav-item" id="nav-etf" onclick="showScanner('etf')">📊 &nbsp;ETF Scanner</div>
+    <div class="sb-nav-item" id="nav-stk" onclick="showScanner('stock')">📈 &nbsp;Stock Scanner</div>
   </div>
   <button class="sb-add" onclick="addModelUI()">+ Add New Model</button>
   <div class="sb-section">Benchmarks</div>
@@ -455,6 +485,7 @@ let S = {
   holdings: {},
   may29: {},
   yields: {},       // ticker -> annual yield %
+  costBasis: {},     // modelName|ticker -> avg cost per share
   blends: {},
   prices: {},
   returns: {},      // modelName -> {2024:[],2025:[],2026:[]}
@@ -487,6 +518,7 @@ function init() {
   S.returns = JSON.parse(localStorage.getItem('mte_returns') || 'null') || {"Large Cap Growth":{"2026":[-0.08,-1.18,-5.69,17.78,11.2,null,null,null,null,null,null,null]},"Large Cap Value":{"2026":[3.26,2.17,-6.06,7.85,3.88,null,null,null,null,null,null,null]},"Metals & Crypto":{"2026":[4.98,-4.91,-7.92,4.68,-1.6,null,null,null,null,null,null,null]},"International":{"2026":[3.32,4.06,-8.91,6.99,2.65,null,null,null,null,null,null,null]},"Small Mid Caps (E)":{"2026":[4.01,5.61,-4.08,12.48,3.15,null,null,null,null,null,null,null]},"Next Generation (E)":{"2026":[-2.67,-3.06,-6.34,15.07,11.82,null,null,null,null,null,null,null]},"Hedge/Low Beta":{"2026":[4.95,-1.04,-5.57,5.32,0.63,null,null,null,null,null,null,null]},"Custom Leverage":{"2026":[11.11,4.48,-7.42,6.52,1.62,null,null,null,null,null,null,null]},"Momentum":{"2026":[0.3,-2.92,-2.68,12.81,4.71,null,null,null,null,null,null,null]},"All Weather Core":{"2026":[1.52,-2.69,-4.01,16.12,11.4,null,null,null,null,null,null,null]},"All Weather Momentum":{"2026":[10.76,-4.07,-7.04,18.73,1.67,null,null,null,null,null,null,null]},"Balanced Growth + Yield (IBKR)":{"2026":[5.07,2.14,-6.52,5.77,2.94,null,null,null,null,null,null,null]},"MDA":{"2026":[-2.69,-16.13,0.23,15.99,3.94,null,null,null,null,null,null,null]},"High Beta Tech":{"2026":[-9.47,-7.44,-3.24,6.18,14.13,null,null,null,null,null,null,null]},"Conservative":{"2026":[1.64,0.53,-3.2,5.58,3.57,null,null,null,null,null,null,null]},"Nasdaq Select 15":{"2026":[0.44,-6.73,-4.85,22.63,19.17,null,null,null,null,null,null,null]},"China":{"2026":[2.14,-7.86,-9.49,5.8,-4.51,null,null,null,null,null,null,null]},"Aggressive Regular":{"2026":[2.98,-0.63,-6.28,9.54,4.1,null,null,null,null,null,null,null]},"Aggressive Margin":{"2026":[3.94,-1.22,-7,11.13,4.37,null,null,null,null,null,null,null]},"SPY":{"2026":[1.47,-0.86,-5.2,10.51,5.26,null,null,null,null,null,null,null]},"QQQ":{"2026":[1.23,-2.34,-4.96,15.69,10.57,null,null,null,null,null,null,null]},"IWM":{"2026":[5.48,0.68,-5.13,12.08,4.48,null,null,null,null,null,null,null]},"IBIT":{"2026":[-4.35,-21.69,3.31,12.75,-3.9,null,null,null,null,null,null,null]},"GLD":{"2026":[12.27,8.72,-11.05,-1.54,-1.54,null,null,null,null,null,null,null]},"Balanced Growth + Yield (Schwab)":{"2026":[4.6,1.9,-4.7,5.77,2.94,null,null,null,null,null,null,null]},"Schwab Aggressive":{"2026":[2.9,-0.1,-5.45,10.73,5.83,null,null,null,null,null,null,null]},"Schwab Moderately Aggressive":{"2026":[2.73,0.51,-5.62,9.67,6.12,null,null,null,null,null,null,null]},"Schwab Moderate":{"2026":[0.96,0.11,-4.03,9.23,3.81,null,null,null,null,null,null,null]}};
   S.lockedMonths = JSON.parse(localStorage.getItem('mte_locked') || '{}');
   S.yields = JSON.parse(localStorage.getItem('mte_yields') || 'null') || KNOWN_YIELDS;
+  S.costBasis = JSON.parse(localStorage.getItem('mte_cost') || '{}');
   S.monthEndPrices = {...SEED_MAY29, ...JSON.parse(localStorage.getItem('mte_mep') || '{}') };
   renderSidebar();
   showOverview();
@@ -500,7 +532,39 @@ async function syncFromServer(){
     const r = await fetch(`${APPS_SCRIPT_URL}?action=getReturns`);
     if(!r.ok) return;
     const data = await r.json();
-    if(data && data.returns && Object.keys(data.returns).length){
+    if(!data) return;
+
+    // Merge watchlists from server — independent of returns data presence
+    if(data.etfWatch && Array.isArray(data.etfWatch) && data.etfWatch.length){
+      const local=JSON.parse(localStorage.getItem('mte_etf_watch')||'[]');
+      const merged=[...new Set([...local,...data.etfWatch])];
+      localStorage.setItem('mte_etf_watch',JSON.stringify(merged));
+    }
+    if(data.stkWatch && Array.isArray(data.stkWatch) && data.stkWatch.length){
+      const local=JSON.parse(localStorage.getItem('mte_stk_watch')||'[]');
+      const merged=[...new Set([...local,...data.stkWatch])];
+      localStorage.setItem('mte_stk_watch',JSON.stringify(merged));
+    }
+    // Merge cost basis independently too — rebalance-driven updates shouldn't depend on returns data
+    if(data.costBasis && Object.keys(data.costBasis).length){
+      Object.assign(S.costBasis, data.costBasis);
+      localStorage.setItem('mte_cost', JSON.stringify(S.costBasis));
+    }
+
+    // Merge models + holdings from server — new models added on other devices become visible here
+    if(data.models && Array.isArray(data.models) && data.models.length){
+      const localNames=new Set(S.models.map(m=>m.name));
+      data.models.forEach(m=>{ if(!localNames.has(m.name)) S.models.push(m); });
+      localStorage.setItem('mte_models', JSON.stringify(S.models));
+    }
+    if(data.holdings && typeof data.holdings==='object' && Object.keys(data.holdings).length){
+      Object.entries(data.holdings).forEach(([modelName, h])=>{
+        if(!S.holdings[modelName]) S.holdings[modelName]=h; // only fill in if missing locally
+      });
+      localStorage.setItem('mte_holdings', JSON.stringify(S.holdings));
+    }
+
+    if(data.returns && Object.keys(data.returns).length){
       Object.entries(data.returns).forEach(([model, years])=>{
         if(!S.returns[model]) S.returns[model]={};
         Object.entries(years).forEach(([year, arr])=>{
@@ -518,8 +582,8 @@ async function syncFromServer(){
       localStorage.setItem('mte_returns', JSON.stringify(S.returns));
       localStorage.setItem('mte_locked', JSON.stringify(S.lockedMonths));
       localStorage.setItem('mte_mep', JSON.stringify(S.monthEndPrices));
-      rerender();
     }
+    rerender();
   } catch(e){ console.log('Sync skipped:', e); }
 }
 
@@ -530,6 +594,7 @@ function save() {
   localStorage.setItem('mte_returns', JSON.stringify(S.returns));
   localStorage.setItem('mte_locked', JSON.stringify(S.lockedMonths));
   localStorage.setItem('mte_yields', JSON.stringify(S.yields));
+  localStorage.setItem('mte_cost', JSON.stringify(S.costBasis));
   localStorage.setItem('mte_mep', JSON.stringify(S.monthEndPrices));
   // Push blends to server every time they change
   pushBlendsToServer();
@@ -566,6 +631,11 @@ function parseASQuote(ticker, q) {
   if (!q || !q.success) return {price:0,prev:0,weekOpen:0,monthOpen:0,dailyReturn:null,wtdReturn:null,monthlyReturn:null};
   const price = q.price || 0;
   const prev = q.prevClose || price;
+
+  // Always recalculate daily from price vs prevClose — never trust regularMarketChangePercent
+  // from Yahoo as it sometimes returns YTD or incorrect values for ETFs
+  const dailyReturn = prev > 0 ? (price - prev) / prev * 100 : 0;
+
   let weekOpen = price, monthOpen = price;
   if (q.closes && q.timestamps && q.closes.length > 1) {
     const closes = q.closes, ts = q.timestamps;
@@ -585,12 +655,15 @@ function parseASQuote(ticker, q) {
       monthOpen = price / (1 + q.monthlyReturn/100);
     if (monthOpen === price && prev > 0) monthOpen = prev;
   }
-  // Store AS-provided returns directly — more accurate than recalculating
   return {
     price, prev, weekOpen, monthOpen,
-    dailyReturn: q.dailyReturn,
+    dailyReturn,
     wtdReturn: q.wtdReturn,
-    monthlyReturn: q.monthlyReturn
+    monthlyReturn: q.monthlyReturn,
+    ma50: q.ma50||0,
+    ma200: q.ma200||0,
+    rsi14: q.rsi14||0,
+    closes: q.closes||[]
   };
 }
 
@@ -609,33 +682,17 @@ async function loadPrices() {
       }
     }).catch(()=>{});
 
-  // Race: Apps Script vs direct Yahoo — whichever responds first wins
-  // This ensures Safari (which blocks Apps Script) still gets prices
-  const appsScriptPromise = Promise.race([
-    fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(tickers.join(','))}`)
-      .then(r=>r.ok?r.json():null),
-    new Promise(resolve=>setTimeout(()=>resolve(null), 8000)) // 8s timeout
-  ]).catch(()=>null);
-
-  // Start direct Yahoo fetch in parallel immediately
-  const directPromise = Promise.all(tickers.map(t=>fetchPriceDirect(t).then(p=>[t,p])));
-
+  // Use Apps Script exclusively for accurate data
   try {
-    const asData = await appsScriptPromise;
-    if (asData && typeof asData === 'object' && Object.values(asData).some(v=>v?.success)) {
-      // Apps Script succeeded — use its data (more accurate)
-      tickers.forEach(t => { if (asData[t]) S.prices[t] = parseASQuote(t, asData[t]); });
-      await vixPromise;
-      document.getElementById('status-txt').textContent='Updated '+new Date().toLocaleTimeString();
-      document.getElementById('status-dot').style.background='#27ae60';
-      rerender();
-      return;
+    const r = await fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(tickers.join(','))}`);
+    if(r.ok){
+      const asData = await r.json();
+      if(asData && typeof asData === 'object'){
+        tickers.forEach(t=>{ if(asData[t]&&asData[t].success) S.prices[t]=parseASQuote(t,asData[t]); });
+      }
     }
-  } catch(e) {}
+  } catch(e){ console.warn('Apps Script failed:', e); }
 
-  // Apps Script failed or timed out — use direct Yahoo results
-  const results = await directPromise;
-  results.forEach(([t,p])=>S.prices[t]=p);
   await vixPromise;
   document.getElementById('status-txt').textContent='Updated '+new Date().toLocaleTimeString();
   document.getElementById('status-dot').style.background='#27ae60';
@@ -644,36 +701,90 @@ async function loadPrices() {
 async function refreshPrices() { await loadPrices(); }
 
 async function fetchPriceDirect(ticker) {
-  const urls = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=6mo`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=6mo`,
-    `https://corsproxy.io/?${encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/'+ticker+'?interval=1d&range=6mo')}`,
+  // Use 2y range to get enough history for 200-DMA (needs 200+ trading days)
+  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=2y`;
+  const proxyUrls = [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(yahooUrl)}`,
+    `https://corsproxy.io/?${encodeURIComponent(yahooUrl)}`,
+    `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=2y`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=2y`,
   ];
-  for (const url of urls) {
-    try {
-      const r = await fetch(url);
-      if (!r.ok) continue;
-      const d = await r.json();
-      if (!d.chart?.result?.[0]) continue;
-      const meta = d.chart.result[0].meta;
-      const closes = d.chart.result[0].indicators.quote[0].close.filter(x=>x!=null);
-      const ts = d.chart.result[0].timestamp;
-      const price = meta.regularMarketPrice || closes[closes.length-1];
-      const prev = meta.chartPreviousClose || closes[closes.length-2] || price;
-      const now = new Date(); const dow = now.getDay();
-      const daysToMon = dow===0?6:dow-1;
-      const monDate = new Date(now); monDate.setDate(now.getDate()-daysToMon); monDate.setHours(0,0,0,0);
-      const monthStart = new Date(now.getFullYear(),now.getMonth(),1);
-      let weekOpen=price, monthOpen=price;
-      for(let i=ts.length-1;i>=1;i--){
-        const d2=new Date(ts[i]*1000);
-        if(d2>=monDate) weekOpen=closes[i-1]||weekOpen;
-        if(d2>=monthStart) monthOpen=closes[i-1]||monthOpen;
+
+  function parseYahoo(d){
+    if(!d?.chart?.result?.[0]) return null;
+    const meta=d.chart.result[0].meta;
+    const rawCloses=d.chart.result[0].indicators.quote[0].close;
+    const rawTs=d.chart.result[0].timestamp;
+    // Filter nulls but keep paired closes+timestamps
+    const pairs=rawTs.map((t,i)=>({t,c:rawCloses[i]})).filter(x=>x.c!=null);
+    const closes=pairs.map(x=>x.c);
+    const ts=pairs.map(x=>x.t);
+    if(!closes.length) return null;
+
+    // Live price from meta, fallback to last close
+    const price=meta.regularMarketPrice||closes[closes.length-1];
+    // Previous close — use meta field (most reliable), fallback to second-to-last close
+    const prev=meta.chartPreviousClose||meta.previousClose||closes[closes.length-2]||price;
+
+    const now=new Date(); const dow=now.getDay();
+    const daysToMon=dow===0?6:dow-1;
+    const monDate=new Date(now); monDate.setDate(now.getDate()-daysToMon); monDate.setHours(0,0,0,0);
+    const monthStart=new Date(now.getFullYear(),now.getMonth(),1);
+    let weekOpen=price, monthOpen=price;
+    for(let i=ts.length-1;i>=1;i--){
+      const d2=new Date(ts[i]*1000);
+      if(d2>=monDate) weekOpen=closes[i-1]||weekOpen;
+      if(d2>=monthStart) monthOpen=closes[i-1]||monthOpen;
+    }
+
+    const ma50=closes.length>=50?closes.slice(-50).reduce((a,b)=>a+b,0)/50:0;
+    // 200-DMA now available since we fetch 2y (~500 trading days)
+    const ma200=closes.length>=200?closes.slice(-200).reduce((a,b)=>a+b,0)/200:
+                closes.length>=100?closes.reduce((a,b)=>a+b,0)/closes.length:0; // partial if <200
+
+    // RSI-14 using Wilder's smoothing
+    let rsi14=50;
+    if(closes.length>=15){
+      let avgGain=0,avgLoss=0;
+      for(let i=closes.length-14;i<closes.length;i++){
+        const chg=closes[i]-closes[i-1];
+        if(chg>0) avgGain+=chg; else avgLoss-=chg;
       }
-      return {price,prev,weekOpen,monthOpen};
-    } catch(e){ continue; }
+      avgGain/=14; avgLoss/=14;
+      rsi14=avgLoss===0?100:100-(100/(1+avgGain/avgLoss));
+    }
+
+    // Daily return: use meta regularMarketChangePercent if available (most accurate)
+    let dailyReturn;
+    if(meta.regularMarketChangePercent!=null) {
+      dailyReturn=meta.regularMarketChangePercent;
+    } else {
+      dailyReturn=prev>0?(price-prev)/prev*100:0;
+    }
+    const wtdReturn=weekOpen&&weekOpen!==price?(price-weekOpen)/weekOpen*100:0;
+    const monthlyReturn=monthOpen&&monthOpen!==price?(price-monthOpen)/monthOpen*100:0;
+    return {price,prev,weekOpen,monthOpen,ma50,ma200,rsi14,closes,dailyReturn,wtdReturn,monthlyReturn};
   }
-  return {price:0,prev:0,weekOpen:0,monthOpen:0};
+
+  // Race all proxies — first valid response wins
+  return new Promise(resolve=>{
+    let resolved=false;
+    let failed=0;
+    const empty={price:0,prev:0,weekOpen:0,monthOpen:0,ma50:0,ma200:0,rsi14:50,closes:[],dailyReturn:0,wtdReturn:0,monthlyReturn:0};
+    proxyUrls.forEach(url=>{
+      fetch(url).then(r=>r.ok?r.json():null).then(d=>{
+        if(resolved) return;
+        const parsed=parseYahoo(d);
+        if(parsed){ resolved=true; resolve(parsed); }
+        else { failed++; if(failed===proxyUrls.length) resolve(empty); }
+      }).catch(()=>{
+        failed++;
+        if(failed===proxyUrls.length) resolve(empty);
+      });
+    });
+    // Overall timeout 15 seconds (2y fetch is larger)
+    setTimeout(()=>{ if(!resolved){ resolved=true; resolve(empty); } },15000);
+  });
 }
 
 // ━━━ RETURN CALCS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -681,9 +792,24 @@ const pct = (v,bold) => v!=null&&!isNaN(v) ? (v>=0?'+':'')+v.toFixed(2)+'%' : '�
 const cls = v => v>0.005?'pos':v<-0.005?'neg':'neu';
 const pf = v => parseFloat((v||'0').toString().replace('%',''))||0;
 
+function pmRet(t){ const p=S.prices[t]; return p?.preMarketReturn||null; }
+function pmPrice(t){ const p=S.prices[t]; return p?.preMarket||null; }
+function modelPreMarket(name){
+  const m=S.models.find(x=>x.name===name);
+  if(m&&m.isBlend){
+    const comps=S.blends[name]||[]; if(!comps.length) return null;
+    let r=0,hasData=false;
+    comps.forEach(c=>{ const sub=modelPreMarket(c.m); if(sub!=null){r+=c.w/100*sub;hasData=true;} });
+    return hasData?r:null;
+  }
+  const h=S.holdings[name]||[]; if(!h.length) return null;
+  let r=0,hasData=false;
+  h.forEach(x=>{ const pm=pmRet(x.t); if(pm!=null){r+=x.w/100*pm;hasData=true;} });
+  return hasData?r:null;
+}
 function dRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.dailyReturn!=null) return p.dailyReturn; return p.prev?(p.price-p.prev)/p.prev*100:0; }
-function wRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.wtdReturn!=null) return p.wtdReturn; return p.weekOpen&&p.weekOpen!==p.price?(p.price-p.weekOpen)/p.weekOpen*100:0; }
-function mRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.monthlyReturn!=null) return p.monthlyReturn; return p.monthOpen&&p.monthOpen!==p.price?(p.price-p.monthOpen)/p.monthOpen*100:0; }
+function wRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.wtdReturn!=null) return p.wtdReturn; return p.weekOpen?(p.price-p.weekOpen)/p.weekOpen*100:0; }
+function mRet(t){ const p=S.prices[t]; if(!p) return 0; if(p.monthlyReturn!=null) return p.monthlyReturn; return p.monthOpen?(p.price-p.monthOpen)/p.monthOpen*100:0; }
 
 // Use raw weights / 100 so that a 115% model correctly amplifies returns
 // e.g. if weights sum to 115, each position contributes weight/100 (not weight/115)
@@ -806,12 +932,19 @@ async function syncHistoricalToServer(){
   const btn = document.getElementById('sync-btn');
   btn.textContent = '⏳ Syncing…'; btn.disabled = true;
   try {
+    const etfWatch=JSON.parse(localStorage.getItem('mte_etf_watch')||'[]');
+    const stkWatch=JSON.parse(localStorage.getItem('mte_stk_watch')||'[]');
     const params = new URLSearchParams({
       action: 'saveReturnsData',
       returns: JSON.stringify(S.returns),
       locked: JSON.stringify(S.lockedMonths),
       mep: JSON.stringify(S.monthEndPrices),
-      blends: JSON.stringify(S.blends)
+      blends: JSON.stringify(S.blends),
+      costBasis: JSON.stringify(S.costBasis),
+      etfWatch: JSON.stringify(etfWatch),
+      stkWatch: JSON.stringify(stkWatch),
+      models: JSON.stringify(S.models),
+      holdings: JSON.stringify(S.holdings)
     });
     const r = await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
     const data = await r.json();
@@ -866,6 +999,8 @@ function renderSidebar(){
       <div class="sb-model-sub">Blended</div>
     </div>`).join('');
   document.getElementById('nav-ov').className='sb-nav-item'+(S.activeView==='overview'?' active':'');
+  document.getElementById('nav-etf').className='sb-nav-item'+(S.activeView==='scanner'&&SCANNER.type==='etf'?' active':'');
+  document.getElementById('nav-stk').className='sb-nav-item'+(S.activeView==='scanner'&&SCANNER.type==='stock'?' active':'');
 }
 
 function showBenchmark(ticker){
@@ -885,6 +1020,8 @@ function showOverview(){
   document.getElementById('tb-title').textContent='Portfolio Overview';
   document.getElementById('tb-sub').textContent=`${S.models.length} models · Live prices · MTE Internal`;
   document.getElementById('back-btn').style.display='none';
+  document.getElementById('nav-etf').className='sb-nav-item';
+  document.getElementById('nav-stk').className='sb-nav-item';
   closeSidebar();
   renderSidebar(); renderOverview();
 }
@@ -922,6 +1059,50 @@ function renderOverview(){
   const best=S.models[bestIdx]||{name:'—'};
   const spyYTD=benchYTD('SPY');
 
+  // Model groups
+  const CUSTOM_MODELS = ['Conservative','Aggressive Regular','Aggressive Margin','Balanced Growth + Yield (IBKR)','Balanced Growth + Yield (Schwab)','MTI 2025','MDA','<10K','<50K'];
+  const STOCK_MODELS  = ['All Weather Core','All Weather Momentum','High Beta Tech','Nasdaq Select 15'];
+
+  function modelRow(m){
+    const d=getModelRet(m.name,dRet);
+    const w=getModelRet(m.name,wRet);
+    const mt=getModelRet(m.name,mRet);
+    const ytd=calcYTD(m.name,2026);
+    const aYTD=ytd-spyYTD;
+    const yld=m.isBlend?0:modelYield(m.name);
+    const pm=modelPreMarket(m.name);
+    const pmCell=pm!=null?`<span class="${cls(pm)}" style="font-size:11px;font-weight:600;">${pct(pm)}</span>`:'<span style="color:var(--text-3);font-size:11px;">—</span>';
+    return `<tr class="row" onclick="showModel('${m.name.replace(/'/g,"\\'")}')">
+      <td><span class="model-nm">${m.name}</span>${m.isBlend?'<span class="blend-pill">Blend</span>':''}</td>
+      <td class="r ${cls(d)}">${pct(d)}</td>
+      <td class="r ${cls(w)}">${pct(w)}</td>
+      <td class="r ${cls(mt)}">${pct(mt)}</td>
+      <td class="r ${cls(ytd)}" style="font-weight:700;">${pct(ytd)}</td>
+      <td class="r ${cls(aYTD)}" style="font-weight:600;">${pct(aYTD)}</td>
+      <td class="r" style="color:var(--green);font-weight:600;">${yld>0?yld.toFixed(1)+'%':'—'}</td>
+    </tr>`;
+  }
+
+  function modelSection(title, names){
+    const models = names.map(n=>S.models.find(m=>m.name===n)).filter(Boolean);
+    if(!models.length) return '';
+    return `<div class="sec-card" style="margin-bottom:14px;">
+      <div class="sec-head"><div class="sec-title">${title}</div><div class="sec-hint">Click any row for detail</div></div>
+      <div class="tbl-scroll"><table class="ov-tbl">
+        <thead><tr>
+          <th style="min-width:180px;">Model</th>
+          <th class="r">Daily</th>
+          <th class="r">WTD</th>
+          <th class="r">MTD</th>
+          <th class="r">YTD 2026</th>
+          <th class="r">Alpha YTD</th>
+          <th class="r">Yield</th>
+        </tr></thead>
+        <tbody>${models.map(modelRow).join('')}</tbody>
+      </table></div>
+    </div>`;
+  }
+
   // Benchmark rows
   const benchRows=BENCHMARKS.map(b=>{
     const d=dRet(b.sym), w=wRet(b.sym), mt=mRet(b.sym);
@@ -935,72 +1116,53 @@ function renderOverview(){
       <td class="r ${cls(mt)}">${pct(mt)}</td>
       <td class="r ${cls(ytd)}" style="font-weight:700;">${pct(ytd)}</td>
       <td class="r ${aYTD!==null?cls(aYTD):'neu'}">${aYTD!==null?pct(aYTD):'—'}</td>
-      <td class="r neu">—</td>
     </tr>`;
   }).join('');
 
+  // Remaining models
+  const allGrouped = [...CUSTOM_MODELS, ...STOCK_MODELS, ...BENCHMARKS.map(b=>b.ticker)];
+  const otherModels = S.models.filter(m=>!allGrouped.includes(m.name));
+
+  const vix=S.prices['^VIX'];
   document.getElementById('content').innerHTML=`
   <div class="sum-cards">
     <div class="sum-card"><div class="sc-label">Models Tracked</div><div class="sc-val" style="color:var(--navy);">${S.models.length}</div><div class="sc-sub">${S.models.filter(m=>!m.isBlend).length} direct · ${S.models.filter(m=>m.isBlend).length} blended</div></div>
     <div class="sum-card"><div class="sc-label">SPY YTD 2026</div><div class="sc-val ${cls(spyYTD)}">${pct(spyYTD)}</div><div class="sc-sub">Benchmark · Jan–Jun cumulative</div></div>
-    <div class="sum-card"><div class="sc-label">VIX — S&P 500 Volatility</div><div class="sc-val" style="color:${(S.prices['^VIX']?.price||0)>25?'var(--red)':(S.prices['^VIX']?.price||0)>18?'var(--orange)':'var(--green)'};">${S.prices['^VIX']?.price?S.prices['^VIX'].price.toFixed(2):'—'}</div><div class="sc-sub">${S.prices['^VIX']?.price?((S.prices['^VIX'].price>25?'⚠ Elevated fear':S.prices['^VIX'].price>18?'⚡ Caution':'✓ Low volatility')+' · Live'):'Fetching…'}</div></div>
+    <div class="sum-card"><div class="sc-label">VIX — S&P 500 Volatility</div><div class="sc-val" style="color:${(vix?.price||0)>25?'var(--red)':(vix?.price||0)>18?'var(--orange)':'var(--green)'};">${vix?.price?vix.price.toFixed(2):'—'}</div><div class="sc-sub">${vix?.price?((vix.price>25?'⚠ Elevated fear':vix.price>18?'⚡ Caution':'✓ Low volatility')+' · Live'):'Fetching…'}</div></div>
     <div class="sum-card"><div class="sc-label">Best YTD 2026</div><div class="sc-val ${cls(calcYTD(best.name,2026))}">${pct(calcYTD(best.name,2026))}</div><div class="sc-sub">${best.name}</div></div>
   </div>
   <div class="sec-card" style="margin-bottom:14px;">
-    <div class="sec-head">
-      <div class="sec-title">Market Benchmarks</div>
-      <div class="sec-hint" style="font-size:11px;color:var(--text-3);">Enter Jan–May returns via Monthly Returns tab on each benchmark · May 29 prices used as YTD anchor</div>
-    </div>
-    <div class="tbl-scroll">
-    <table class="ov-tbl">
+    <div class="sec-head"><div class="sec-title">Market Benchmarks</div><div class="sec-hint">Pre-market shown before market open</div></div>
+    <div class="tbl-scroll"><table class="ov-tbl">
       <thead><tr>
-        <th style="min-width:200px;">Index</th>
+        <th style="min-width:160px;">Index</th>
         <th class="r">Daily</th>
         <th class="r">WTD</th>
         <th class="r">MTD</th>
         <th class="r">YTD 2026</th>
-        <th class="r">Alpha YTD vs SPY</th>
-        <th class="r">Yield</th>
+        <th class="r">Alpha YTD</th>
       </tr></thead>
       <tbody>${benchRows}</tbody>
-    </table>
-    </div>
+    </table></div>
   </div>
-  <div class="sec-card">
-    <div class="sec-head"><div class="sec-title">All Models — 2026 Performance</div><div class="sec-hint">Click any row for detail</div></div>
-    <div class="tbl-scroll">
-    <table class="ov-tbl">
+  ${modelSection('Custom Models', CUSTOM_MODELS)}
+  ${modelSection('Stock Models', STOCK_MODELS)}
+  ${otherModels.length?`<div class="sec-card" style="margin-bottom:14px;">
+    <div class="sec-head"><div class="sec-title">All Other Models</div><div class="sec-hint">Click any row for detail</div></div>
+    <div class="tbl-scroll"><table class="ov-tbl">
       <thead><tr>
-        <th style="min-width:200px;">Model</th>
+        <th style="min-width:180px;">Model</th>
         <th class="r">Daily</th>
         <th class="r">WTD</th>
         <th class="r">MTD</th>
         <th class="r">YTD 2026</th>
-        <th class="r">Alpha YTD vs SPY</th>
+        <th class="r">Alpha YTD</th>
         <th class="r">Yield</th>
       </tr></thead>
-      <tbody>
-        ${S.models.map(m=>{
-          const d=getModelRet(m.name,dRet);
-          const w=getModelRet(m.name,wRet);
-          const mt=getModelRet(m.name,mRet);
-          const ytd=calcYTD(m.name,2026);
-          const aYTD=ytd-spyYTD;
-          const yld=m.isBlend?0:modelYield(m.name);
-          return `<tr class="row" onclick="showModel('${m.name.replace(/'/g,"\\'")}')">
-            <td><span class="model-nm">${m.name}</span>${m.isBlend?'<span class="blend-pill">Blend</span>':''}</td>
-            <td class="r ${cls(d)}">${pct(d)}</td>
-            <td class="r ${cls(w)}">${pct(w)}</td>
-            <td class="r ${cls(mt)}">${pct(mt)}</td>
-            <td class="r ${cls(ytd)}" style="font-weight:700;">${pct(ytd)}</td>
-            <td class="r ${cls(aYTD)}" style="font-weight:600;">${pct(aYTD)}</td>
-            <td class="r" style="color:var(--green);font-weight:600;">${yld>0?yld.toFixed(1)+'%':'—'}</td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
-    </div>
-  </div>`;
+      <tbody>${otherModels.map(modelRow).join('')}</tbody>
+    </table></div>
+  </div>`:''}
+  `;
 }
 
 // ━━━ MODEL DETAIL ━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1016,8 +1178,10 @@ function showModel(name){
   renderSidebar(); renderDetail();
 }
 function rerender(){
+  renderSidebar();
   if(S.activeView==='overview') renderOverview();
   else if(S.activeView==='detail') renderDetail();
+  else if(S.activeView==='scanner') renderScanner();
 }
 function renderDetail(){
   const name=S.activeModel; const m=S.models.find(x=>x.name===name);
@@ -1027,6 +1191,20 @@ function renderDetail(){
   const ytd26=calcYTD(name,2026);
   const ytd25=calcYTD(name,2025);
   const yld=m.isBlend?0:modelYield(name);
+  // Since Inception — weighted avg cost basis return
+  function sinceInception(modelName){
+    const h=S.holdings[modelName]||[]; if(!h.length) return null;
+    const tw=h.reduce((a,x)=>a+x.w,0)||100;
+    let ret=0, hasAny=false;
+    h.forEach(x=>{
+      const cbKey=`${modelName}|${x.t}`;
+      const cost=S.costBasis[cbKey]||0;
+      const p=S.prices[x.t]?.price||0;
+      if(cost>0&&p>0){ ret+=(x.w/tw)*((p-cost)/cost*100); hasAny=true; }
+    });
+    return hasAny?ret:null;
+  }
+  const inception=m.isBlend?null:sinceInception(name);
   document.getElementById('content').innerHTML=`
   <div class="dpc-row">
     ${[
@@ -1036,6 +1214,7 @@ function renderDetail(){
       {l:'WTD',v:wt,s:'Week to date'},
       {l:'MTD',v:mt,s:'SPY '+pct(mRet('SPY'))},
       {l:'Alpha MTD',v:mt-mRet('SPY'),s:'vs SPY'},
+      {l:'Since Inception',v:inception,s:inception!=null?'vs avg cost basis':'Add cost basis in Holdings'},
       {l:'Yield',v:yld||null,s:'Weighted avg annual'},
     ].map(c=>`<div class="dpc"><div class="dpc-lbl">${c.l}</div><div class="dpc-val ${c.v!=null?cls(c.v):'neu'}">${c.v!=null?pct(c.v):'—'}</div><div class="dpc-sub">${c.s}</div></div>`).join('')}
   </div>
@@ -1137,6 +1316,7 @@ function buildHoldings(){
       <thead><tr>
         <th>Ticker</th><th class="r">Price</th><th class="r">Daily</th><th class="r">WTD</th><th class="r">MTD</th>
         <th class="r">Weight %</th><th class="r">Drifted %</th><th class="r">Contrib</th>
+        <th class="r">Avg Cost</th><th class="r">Return</th>
         <th class="r">Ann. Yield</th>${isE?'<th></th>':''}
       </tr></thead>
       <tbody>${h.map((x,i)=>{
@@ -1147,6 +1327,9 @@ function buildHoldings(){
         const diff=dr-tgtPct; const flag=Math.abs(diff)>tol;
         const contrib=tgtPct/100*d;
         const yld=S.yields[x.t]||0;
+        const cbKey=`${name}|${x.t}`;
+        const cost=S.costBasis[cbKey]||0;
+        const ret=cost>0&&p.price>0?(p.price-cost)/cost*100:null;
         return `<tr>
           <td><span class="tkr" style="cursor:pointer;" onclick="openResearch('${x.t}')">${x.t}</span></td>
           <td class="r">$${p.price.toFixed(2)}</td>
@@ -1156,6 +1339,8 @@ function buildHoldings(){
           <td class="r">${isE?`<input class="w-inp" value="${x.w}" onchange="updW(${i},this.value)">`:`${x.w.toFixed(1)}%`}</td>
           <td class="r ${flag?'drift-hi':''}">${dr.toFixed(1)}%${flag?` (${diff>0?'+':''}${diff.toFixed(1)}%)`:''}  </td>
           <td class="r ${cls(contrib)}">${pct(contrib)}</td>
+          <td class="r">${isE?`<input class="yield-inp" value="${cost||''}" onchange="updCost('${cbKey}',this.value)" placeholder="0.00" title="Avg cost per share" style="width:70px;">`:`${cost>0?'$'+cost.toFixed(2):'—'}`}</td>
+          <td class="r ${ret!=null?cls(ret):'neu'}" style="font-weight:${ret!=null?'600':'400'};">${ret!=null?pct(ret):'—'}</td>
           <td class="r" style="color:var(--green);">${isE?`<input class="yield-inp" value="${yld}" onchange="updYield('${x.t}',this.value)" title="Annual yield %">`:`${yld>0?yld.toFixed(1)+'%':'—'}`}</td>
           ${isE?`<td><button class="del-btn" onclick="delH(${i})">×</button></td>`:''}
         </tr>`;
@@ -1171,6 +1356,7 @@ function buildHoldings(){
 }
 function updW(i,v){ S.holdings[S.activeModel][i].w=parseFloat(v)||0; save(); renderSubTab(); }
 function updYield(t,v){ S.yields[t]=parseFloat(v)||0; save(); renderSubTab(); }
+function updCost(key,v){ S.costBasis[key]=parseFloat(v)||0; save(); renderSubTab(); }
 function delH(i){ S.holdings[S.activeModel].splice(i,1); save(); renderSubTab(); }
 function addH(){
   const t=document.getElementById('add-t').value.trim().toUpperCase();
@@ -1279,6 +1465,8 @@ function confirmRB(){
   if(!S.editMode){ alert('Enable edit mode to confirm a rebalance.'); return; }
   const name=S.activeModel; const m=S.models.find(x=>x.name===name);
   const changes=[];
+  const costUpdates=[]; // {ticker, oldW, newW, oldCost, newCost}
+
   if(m.isBlend){
     const comps=S.blends[name]||[]; const tw=comps.reduce((a,x)=>a+x.w,0)||100;
     comps.forEach((c,i)=>{
@@ -1287,16 +1475,57 @@ function confirmRB(){
     });
   } else {
     const h=S.holdings[name]||[]; const tw=100; // use raw weights, not normalized
+    const tickersChanged=[];
     h.forEach((x,i)=>{
       const o=(x.w/tw*100).toFixed(1); const n=parseFloat(document.getElementById(`rb_${i}`)?.value)||0;
-      if(Math.abs(n-parseFloat(o))>0.05){ changes.push(`${x.t}: ${o}→${n}%`); x.w=n; }
+      if(Math.abs(n-parseFloat(o))>0.05){
+        changes.push(`${x.t}: ${o}→${n}%`);
+        tickersChanged.push({ticker:x.t, oldW:parseFloat(o), newW:n, idx:i});
+      }
     });
+    if(tickersChanged.length){
+      // Ask for the rebalance execution price for each changed ticker that INCREASED in weight
+      // (only increases require a cost-basis blend; decreases/closures don't need a price)
+      const increased=tickersChanged.filter(c=>c.newW>c.oldW);
+      const rebalancePrices={};
+      for(const c of increased){
+        const cbKey=`${name}|${c.ticker}`;
+        const currentMarketPrice=S.prices[c.ticker]?.price||0;
+        const promptDefault=currentMarketPrice>0?currentMarketPrice.toFixed(2):'';
+        const input=prompt(`Rebalance price for ${c.ticker} (weight ${c.oldW}%→${c.newW}%):`, promptDefault);
+        if(input===null){ alert('Rebalance cancelled.'); return; } // user hit Cancel — abort entire rebalance
+        const px=parseFloat(input);
+        if(!isNaN(px)&&px>0) rebalancePrices[c.ticker]=px;
+      }
+      // Apply weight changes + recalculate cost basis
+      tickersChanged.forEach(c=>{
+        h[c.idx].w=c.newW;
+        const cbKey=`${name}|${c.ticker}`;
+        const oldCost=S.costBasis[cbKey]||0;
+        if(c.newW>c.oldW && rebalancePrices[c.ticker]){
+          // Buying more — blend old cost basis with new purchase price, weighted by $ allocation
+          const newPx=rebalancePrices[c.ticker];
+          const newCost=oldCost>0
+            ? (c.oldW*oldCost + (c.newW-c.oldW)*newPx) / c.newW
+            : newPx; // no prior position — cost basis is just the entry price
+          S.costBasis[cbKey]=newCost;
+          costUpdates.push(`${c.ticker}: avg cost $${oldCost.toFixed(2)||'0.00'}→$${newCost.toFixed(2)}`);
+        } else if(c.newW===0){
+          // Position fully closed — clear cost basis
+          delete S.costBasis[cbKey];
+          costUpdates.push(`${c.ticker}: position closed, cost basis cleared`);
+        }
+        // newW < oldW (partial trim): average cost basis is unchanged — no action needed
+      });
+    }
   }
   if(!changes.length){ alert('No changes.'); return; }
   const hist=JSON.parse(localStorage.getItem('mte_rb_'+name)||'[]');
-  const d=new Date(); hist.push({date:`${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`,changes:changes.join(' · ')});
+  const d=new Date();
+  const fullLog=costUpdates.length?changes.join(' · ')+' | Cost basis: '+costUpdates.join(' · '):changes.join(' · ');
+  hist.push({date:`${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`,changes:fullLog});
   localStorage.setItem('mte_rb_'+name,JSON.stringify(hist));
-  save(); renderDetail(); alert('✓ Rebalance logged.');
+  save(); renderDetail(); alert('✓ Rebalance logged.'+(costUpdates.length?' Avg cost updated for '+costUpdates.length+' holding(s).':''));
 }
 
 // ADD MODEL
@@ -1734,6 +1963,286 @@ function renderBacktest(period){
   </div>`;
 }
 
+// ━━━ SCANNER ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const SEED_ETFS = ['SCHG','SPMO','CGDV','VTV','IBIT','IAU','SLV','XME','GLTR','EETH','IDMO','FEZ','DFIV','AVEM','XMMO','XSMO','ARKK','CHAT','FBOT','SHLD','HDV','SETM','PDBC','IGV','XLF','BAR','BITQ','FCG','NLR','REMX','QTUM','SPHY','FEPI','IVES','GDX','JEPQ','BOXX','XLE','IGF','GRNY','BIL','SCYB','GLD','XLK','SOXX','EFV','INDA','TLT','SSK','GLXY','XRPT','BMNR','BTCI','FYC','IWM','QQQ','SPY','KWEB','FXI','NODE','USDU'];
+const SEED_STOCKS = ['CRWD','AVGO','GOOGL','CAT','NVDA','DELL','AAPL','GS','AMZN','META','MSFT','LLY','ORCL','COST','UBER','TOL','EME','TSLA','IRM','LIN','COIN','BSX','LRCX','ANET','RTX','APH','RKLB','TT','WMT','PLTR','NFLX','SHOP','AXON','SOFI','SNOW','CLS','UPST','PINS','ZS','ADSK','AMD','MU','ADBE','NTRA','NOW','NTES','KC','BABA','TME','YMM','TSM','TCOM','JD'];
+
+let SCANNER = { type:'etf', tab:'portfolio' };
+const DEC31_CACHE = {}; // ticker -> Dec 31 2025 closing price
+
+async function fetchDec31Prices(tickers){
+  // Batch fetch Dec31 2025 prices via Apps Script
+  try {
+    const r = await fetch(`${APPS_SCRIPT_URL}?action=getDec31Prices&tickers=${encodeURIComponent(tickers.join(','))}`);
+    if(r.ok){
+      const data = await r.json();
+      Object.entries(data).forEach(([t,price])=>{ if(price) DEC31_CACHE[t]=price; });
+      return;
+    }
+  } catch(e){}
+  // Fallback: fetch individually via proxy
+  await Promise.all(tickers.map(t=>fetchDec31Price(t)));
+}
+
+async function fetchDec31Price(ticker){
+  if(DEC31_CACHE[ticker]) return DEC31_CACHE[ticker];
+  const urls = [
+    `https://api.allorigins.win/raw?url=${encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/'+ticker+'?interval=1d&period1=1767139200&period2=1767312000')}`,
+    `https://corsproxy.io/?${encodeURIComponent('https://query1.finance.yahoo.com/v8/finance/chart/'+ticker+'?interval=1d&period1=1767139200&period2=1767312000')}`
+  ];
+  for(const url of urls){
+    try {
+      const r = await fetch(url);
+      if(!r.ok) continue;
+      const d = await r.json();
+      const closes = d?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(x=>x!=null);
+      if(closes&&closes.length>0){ DEC31_CACHE[ticker]=closes[closes.length-1]; return DEC31_CACHE[ticker]; }
+    } catch(e){}
+  }
+  return null;
+}
+
+function getScannerList(type){
+  const seed = type==='etf'?SEED_ETFS:SEED_STOCKS;
+  const watchKey = type==='etf'?'mte_etf_watch':'mte_stk_watch';
+  const watch = JSON.parse(localStorage.getItem(watchKey)||'[]');
+  return { portfolio:[...new Set(seed)], watchlist:[...new Set(watch)] };
+}
+
+function getSignal(p, prev){
+  if(!p||!p.price) return {label:'No data',cls:'sig-caut',alerts:[]};
+  const price=p.price;
+  const ma50=p.ma50||0, ma200=p.ma200||0;
+  // Calculate 21-EMA from closes if available
+  const closes=p.closes||[];
+  let ema21=0;
+  if(closes.length>=21){
+    const k=2/22;
+    ema21=closes.slice(0,21).reduce((a,b)=>a+b,0)/21;
+    for(let i=21;i<closes.length;i++) ema21=closes[i]*k+ema21*(1-k);
+  }
+  const rsi=p.rsi14||50;
+  const alerts=[];
+
+  // Reclaim alert — was below all MAs, now above any
+  if(prev){
+    const wasBelow21=prev.price<(prev.ema21||ema21*1.01);
+    const wasBelow50=prev.price<(prev.ma50||ma50*1.01);
+    const wasBelow200=prev.price<(prev.ma200||ma200*1.01);
+    const wasAllBelow=wasBelow21&&wasBelow50&&wasBelow200;
+    if(wasAllBelow){
+      if(price>ema21&&prev.price<=ema21) alerts.push('🔔 Reclaimed 21-EMA');
+      if(price>ma50&&prev.price<=ma50) alerts.push('🔔 Reclaimed 50-DMA');
+      if(price>ma200&&prev.price<=ma200) alerts.push('🔔 Reclaimed 200-DMA');
+    }
+    // Breakdown alerts
+    if(prev.price>ema21&&price<=ema21) alerts.push('⚡ Broke 21-EMA');
+    if(prev.price>ma50&&price<=ma50) alerts.push('⚡ Broke 50-DMA');
+    if(prev.price>ma200&&price<=ma200) alerts.push('⚡ Broke 200-DMA');
+  }
+
+  // RSI signals
+  let rsiSig='';
+  if(rsi>70) rsiSig='⚠ Overbought';
+  else if(rsi<30) rsiSig='🟢 Oversold';
+
+  // Main signal
+  let label,cls;
+  if(price>ma50&&price>ma200){
+    if(rsi>=50&&rsi<=70){ label='✅ Strong Momentum'; cls='sig-bull'; }
+    else { label='✅ Bullish — Hold'; cls='sig-bull'; }
+  } else if(price>ma200&&price<=ma50){
+    label='⚠ Caution — Watch'; cls='sig-caut';
+  } else {
+    label='🔴 Exit — Reduce'; cls='sig-exit';
+  }
+
+  if(rsiSig) alerts.unshift(rsiSig);
+  return {label,cls,alerts,ema21,rsi};
+}
+
+function scannerRow(ticker, type){
+  const p = S.prices[ticker];
+  if(!p||!p.price) return `<tr>
+    <td style="font-weight:700;color:var(--blue);">${ticker}</td>
+    <td colspan="9" style="color:var(--text-3);font-size:12px;">Loading…</td>
+    <td><button class="remove-btn" onclick="removeScannerTicker('${ticker}','${type}')">✕</button></td>
+  </tr>`;
+
+  const price=p.price;
+  const ma50=p.ma50||0, ma200=p.ma200||0;
+  const {label,cls,alerts,ema21,rsi}=getSignal(p,null);
+  const d=dRet(ticker);
+  // True YTD from Dec 31 2025 close
+  const dec31 = DEC31_CACHE[ticker];
+  const tickerPrice = S.prices[ticker];
+  const ytd = dec31&&tickerPrice&&dec31>0?(tickerPrice.price-dec31)/dec31*100:null;
+  const spyDec31 = DEC31_CACHE['SPY'];
+  const spyP = S.prices['SPY'];
+  const spyYTD = spyDec31&&spyP&&spyDec31>0?(spyP.price-spyDec31)/spyDec31*100:null;
+  const alpha = ytd!=null&&spyYTD!=null?ytd-spyYTD:null;
+
+  const maStatus=(ma,lbl)=>ma>0?`<span class="ma-bar ${price>ma?'ma-above':'ma-below'}"></span>${lbl}: $${ma.toFixed(0)}`:'—';
+  const alertHtml=alerts.length?`<div style="margin-top:4px;">${alerts.map(a=>`<span style="font-size:10px;color:var(--orange);display:block;">${a}</span>`).join('')}</div>`:'';
+
+  const isSeed = (type==='etf'?SEED_ETFS.includes(ticker):SEED_STOCKS.includes(ticker)) && SCANNER.tab!=='watchlist';
+
+  return `<tr>
+    <td style="font-weight:700;color:var(--blue);cursor:pointer;" onclick="openResearch('${ticker}')">${ticker}${alerts.length?'<span class="alert-dot"></span>':''}</td>
+    <td class="r">$${price.toFixed(2)}</td>
+    <td class="r ${cls2(d)}">${pct(d)}</td>
+    <td class="r ${ytd!=null?cls2(ytd):'neu'}">${ytd!=null?pct(ytd):'Loading…'}</td>
+    <td class="r ${alpha!=null?cls2(alpha):'neu'}">${alpha!=null?pct(alpha):'—'}</td>
+    <td class="r" style="font-size:11px;">${ema21>0?`$${ema21.toFixed(0)} <span style="color:${price>ema21?'var(--green)':'var(--red)'}; font-size:10px;">(${((price-ema21)/ema21*100).toFixed(1)}%)</span>`:'—'}</td>
+    <td class="r" style="font-size:11px;">${ma50>0?`$${ma50.toFixed(0)} <span style="color:${price>ma50?'var(--green)':'var(--red)'}; font-size:10px;">(${((price-ma50)/ma50*100).toFixed(1)}%)</span>`:'—'}</td>
+    <td class="r" style="font-size:11px;">${ma200>0?`$${ma200.toFixed(0)} <span style="color:${price>ma200?'var(--green)':'var(--red)'}; font-size:10px;">(${((price-ma200)/ma200*100).toFixed(1)}%)</span>`:'—'}</td>
+    <td class="r" style="font-size:11px;color:${rsi>70?'var(--red)':rsi<30?'var(--green)':'var(--text-2)'};">${rsi.toFixed(0)}</td>
+    <td><span class="sig-badge ${cls}">${label}</span>${alertHtml}</td>
+    <td>${isSeed?'':`<button class="remove-btn" onclick="removeScannerTicker('${ticker}','${type}')">✕</button>`}</td>
+  </tr>`;
+}
+
+function cls2(v){ return v>0.005?'pos':v<-0.005?'neg':'neu'; }
+
+function showScanner(type){
+  SCANNER.type=type; SCANNER.tab='portfolio';
+  S.activeView='scanner'; S.activeModel=null;
+  document.getElementById('tb-title').textContent=type==='etf'?'ETF Scanner':'Stock Scanner';
+  document.getElementById('tb-sub').textContent='Technical signals & action recommendations';
+  document.getElementById('back-btn').style.display='none';
+  closeSidebar();
+  // Update sidebar active state
+  document.getElementById('nav-ov').className='sb-nav-item';
+  document.getElementById('nav-etf').className='sb-nav-item'+(type==='etf'?' active':'');
+  document.getElementById('nav-stk').className='sb-nav-item'+(type==='stock'?' active':'');
+  renderScanner();
+}
+
+function renderScanner(){
+  const type=SCANNER.type;
+  const {portfolio,watchlist}=getScannerList(type);
+  const list=SCANNER.tab==='portfolio'?portfolio:watchlist;
+
+  // Fetch live prices for any tickers missing from S.prices (e.g. watchlist tickers after reload)
+  const missingPrices=[...new Set([...list,'SPY'])].filter(t=>!S.prices[t]||!S.prices[t].price);
+  if(missingPrices.length){
+    fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(missingPrices.join(','))}`)
+      .then(r=>r.ok?r.json():null)
+      .then(asData=>{
+        if(asData && typeof asData==='object'){
+          missingPrices.forEach(t=>{ if(asData[t]&&asData[t].success) S.prices[t]=parseASQuote(t,asData[t]); });
+        }
+        const stillMissing=missingPrices.filter(t=>!S.prices[t]||!S.prices[t].price);
+        return Promise.all(stillMissing.map(t=>fetchPriceDirect(t).then(p=>{ if(p&&p.price) S.prices[t]=p; })));
+      })
+      .catch(()=>Promise.all(missingPrices.map(t=>fetchPriceDirect(t).then(p=>{ if(p&&p.price) S.prices[t]=p; }))))
+      .then(()=>{
+        const inp=document.getElementById('scanner-add-inp');
+        if(!inp||document.activeElement!==inp){ if(S.activeView==='scanner') renderScanner(); }
+      });
+  }
+
+  // Fetch Dec31 2025 prices for tickers not yet cached — only trigger once
+  const missing=[...new Set([...list,'SPY'])].filter(t=>!DEC31_CACHE[t]);
+  if(missing.length){
+    fetchDec31Prices(missing).then(()=>{
+      // Only re-render if user is not currently typing in the input
+      const inp = document.getElementById('scanner-add-inp');
+      if(!inp || document.activeElement !== inp){
+        if(S.activeView==='scanner') renderScanner();
+      }
+    });
+  }
+
+  const tableHTML=`<div class="tbl-scroll"><table class="scanner-tbl">
+    <thead><tr>
+      <th>Ticker</th>
+      <th class="r">Price</th>
+      <th class="r">Daily</th>
+      <th class="r">YTD</th>
+      <th class="r">Alpha vs SPY</th>
+      <th class="r">21-EMA</th>
+      <th class="r">50-DMA</th>
+      <th class="r">200-DMA</th>
+      <th class="r">RSI</th>
+      <th>Signal</th>
+      <th></th>
+    </tr></thead>
+    <tbody>${list.map(t=>scannerRow(t,type)).join('')}</tbody>
+  </table></div>`;
+
+  const watchKey=type==='etf'?'mte_etf_watch':'mte_stk_watch';
+
+  document.getElementById('content').innerHTML=`
+  <div class="sec-card" style="overflow:hidden;">
+    <div class="scanner-tabs">
+      <button class="scanner-tab ${SCANNER.tab==='portfolio'?'active':''}" onclick="setScannerTab('portfolio')">
+        In Portfolio (${portfolio.length})
+      </button>
+      <button class="scanner-tab ${SCANNER.tab==='watchlist'?'active':''}" onclick="setScannerTab('watchlist')">
+        Watchlist (${watchlist.length})
+      </button>
+    </div>
+    <div class="watchlist-add">
+      <input class="watchlist-inp" id="scanner-add-inp" placeholder="Add ticker (e.g. MSFT)" 
+        onkeydown="if(event.key==='Enter')addScannerTicker('${type}')">
+      <button class="btn btn-navy" onclick="addScannerTicker('${type}')" style="padding:7px 14px;font-size:12px;">+ Add</button>
+    </div>
+    ${list.length?tableHTML:`<div style="padding:40px;text-align:center;color:var(--text-3);">
+      ${SCANNER.tab==='portfolio'?'No tickers loaded.':'Watchlist empty — add tickers above.'}
+    </div>`}
+  </div>`;
+}
+
+function setScannerTab(tab){
+  SCANNER.tab=tab;
+  renderScanner();
+}
+
+async function pushWatchlistToServer(type){
+  try {
+    const etfWatch=JSON.parse(localStorage.getItem('mte_etf_watch')||'[]');
+    const stkWatch=JSON.parse(localStorage.getItem('mte_stk_watch')||'[]');
+    const params=new URLSearchParams({
+      action:'saveWatchlist',
+      etfWatch:JSON.stringify(etfWatch),
+      stkWatch:JSON.stringify(stkWatch)
+    });
+    await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
+  } catch(e){}
+}
+
+function addScannerTicker(type){
+  const inp=document.getElementById('scanner-add-inp');
+  const ticker=(inp.value||'').trim().toUpperCase().replace(/[^A-Z0-9.\-^]/g,'');
+  if(!ticker) return;
+  const watchKey=type==='etf'?'mte_etf_watch':'mte_stk_watch';
+  const list=JSON.parse(localStorage.getItem(watchKey)||'[]');
+  if(!list.includes(ticker)) list.push(ticker);
+  localStorage.setItem(watchKey,JSON.stringify(list));
+  inp.value='';
+  SCANNER.tab='watchlist';
+  pushWatchlistToServer(type);
+  renderScanner();
+  // Load price for new ticker via Apps Script (best quality), fallback to direct
+  fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(ticker)}`)
+    .then(r=>r.ok?r.json():null)
+    .then(asData=>{
+      if(asData&&asData[ticker]&&asData[ticker].success){ S.prices[ticker]=parseASQuote(ticker,asData[ticker]); renderScanner(); }
+      else return fetchPriceDirect(ticker).then(p=>{ S.prices[ticker]=p; renderScanner(); });
+    })
+    .catch(()=>fetchPriceDirect(ticker).then(p=>{ S.prices[ticker]=p; renderScanner(); }));
+}
+
+function removeScannerTicker(ticker,type){
+  const watchKey=type==='etf'?'mte_etf_watch':'mte_stk_watch';
+  let list=JSON.parse(localStorage.getItem(watchKey)||'[]');
+  list=list.filter(t=>t!==ticker);
+  localStorage.setItem(watchKey,JSON.stringify(list));
+  pushWatchlistToServer(type);
+  renderScanner();
+}
+
 init();
 
 // Debug mode — add ?debug=1 to URL to see diagnostic info
@@ -1785,3 +2294,4 @@ if(new URLSearchParams(window.location.search).get('debug')==='1'){
     </div>
   </div>
 </div>
+
