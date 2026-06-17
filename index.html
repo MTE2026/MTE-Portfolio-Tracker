@@ -308,6 +308,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
   .sb-overlay { display: none !important; }
 }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -551,19 +552,6 @@ async function syncFromServer(){
       localStorage.setItem('mte_cost', JSON.stringify(S.costBasis));
     }
 
-    // Merge models + holdings from server — new models added on other devices become visible here
-    if(data.models && Array.isArray(data.models) && data.models.length){
-      const localNames=new Set(S.models.map(m=>m.name));
-      data.models.forEach(m=>{ if(!localNames.has(m.name)) S.models.push(m); });
-      localStorage.setItem('mte_models', JSON.stringify(S.models));
-    }
-    if(data.holdings && typeof data.holdings==='object' && Object.keys(data.holdings).length){
-      Object.entries(data.holdings).forEach(([modelName, h])=>{
-        if(!S.holdings[modelName]) S.holdings[modelName]=h; // only fill in if missing locally
-      });
-      localStorage.setItem('mte_holdings', JSON.stringify(S.holdings));
-    }
-
     if(data.returns && Object.keys(data.returns).length){
       Object.entries(data.returns).forEach(([model, years])=>{
         if(!S.returns[model]) S.returns[model]={};
@@ -618,7 +606,7 @@ async function pushToServer(){
 
 // ━━━ PRICES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Apps Script URL — fetches Yahoo Finance server-side (no CORS issues)
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx7yTD_iD5RGaszjiwc9zicZ0o9hw7W52OEfyGqgt0LJGo-Wdbt5u0tHJKsvi5z5V_Ehg/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyC4E8A1J1cEWP3WS4afgzqTIG5n6Us2K3grhBC0mITgDcbhlcoZsU201G6NGvD-gLVyg/exec';
 
 function allTickers() {
   const t = new Set(INDICES_WATCH);
@@ -942,9 +930,7 @@ async function syncHistoricalToServer(){
       blends: JSON.stringify(S.blends),
       costBasis: JSON.stringify(S.costBasis),
       etfWatch: JSON.stringify(etfWatch),
-      stkWatch: JSON.stringify(stkWatch),
-      models: JSON.stringify(S.models),
-      holdings: JSON.stringify(S.holdings)
+      stkWatch: JSON.stringify(stkWatch)
     });
     const r = await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
     const data = await r.json();
@@ -1218,6 +1204,7 @@ function renderDetail(){
   </div>
   <div class="sub-tabs">
     <button class="sub-tab ${S.activeSubTab==='monthly'?'active':''}" onclick="setSubTab('monthly')">Monthly Returns</button>
+    <button class="sub-tab ${S.activeSubTab==='charts'?'active':''}" onclick="setSubTab('charts')">📈 Charts</button>
     ${!m.isBlend?`<button class="sub-tab ${S.activeSubTab==='holdings'?'active':''}" onclick="setSubTab('holdings')">Holdings</button>`:''}
     ${m.isBlend?`<button class="sub-tab ${S.activeSubTab==='blend'?'active':''}" onclick="setSubTab('blend')">Composition</button>`:''}
     <button class="sub-tab ${S.activeSubTab==='rebalance'?'active':''}" onclick="setSubTab('rebalance')">Rebalance</button>
@@ -1225,11 +1212,16 @@ function renderDetail(){
   <div id="subtab"></div>`;
   renderSubTab();
 }
-function setSubTab(t){ S.activeSubTab=t; renderSubTab(); }
+function setSubTab(t){
+  destroyCharts();
+  S.activeSubTab=t;
+  renderSubTab();
+}
 function setYear(y){ S.activeYear=y; renderSubTab(); }
 function renderSubTab(){
   const el=document.getElementById('subtab'); if(!el) return;
   if(S.activeSubTab==='monthly') el.innerHTML=buildMonthly();
+  else if(S.activeSubTab==='charts'){ el.innerHTML=buildChartsHTML(); renderCharts(); }
   else if(S.activeSubTab==='holdings') el.innerHTML=buildHoldings();
   else if(S.activeSubTab==='blend') el.innerHTML=buildBlend();
   else if(S.activeSubTab==='rebalance') el.innerHTML=buildRebalance();
@@ -1567,8 +1559,6 @@ function closePwd(){
 }
 
 // ━━━ RESEARCH MODAL ━━━━━━━━━━━━━━━━━━━━━━━━━━
-const GEMINI_KEY = 'AIzaSyB3oKJrjD5_1R2iD9tTGap0dRf208vk7g0';
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
 
 let RES = { ticker:'', tab:'technicals', btPeriod:'5y', btData:null, techData:null };
 
@@ -2239,6 +2229,203 @@ function removeScannerTicker(ticker,type){
   localStorage.setItem(watchKey,JSON.stringify(list));
   pushWatchlistToServer(type);
   renderScanner();
+}
+
+// ━━━ CHARTS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+let _chartInstances = {};
+
+function destroyCharts(){
+  Object.values(_chartInstances).forEach(c=>{ try{ c.destroy(); }catch(e){} });
+  _chartInstances = {};
+}
+
+// Build cumulative NAV series from stored monthly returns
+function buildNavSeries(modelName){
+  const now = new Date();
+  const curYr = now.getFullYear();
+  const curMo = now.getMonth();
+  const MO = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  const labels = ['Start'];
+  const modelNav = [100000];
+  const spyNav   = [100000];
+  let mCum = 100000, sCum = 100000;
+
+  [2024, 2025, 2026].forEach(yr=>{
+    const mArr = getMonthArr(modelName, yr);
+    const sArr = getMonthArr('SPY', yr);
+    // Has any data this year?
+    const hasData = mArr.some(v=>v!=null);
+    if(!hasData && yr < curYr) return;
+
+    const limit = (yr === curYr) ? curMo + 1 : 12;
+    for(let i = 0; i < limit; i++){
+      const isLive = (yr === curYr && i === curMo);
+      let mRet = 0, sRet = 0;
+      if(isLive){
+        mRet = currentMonthDrift(modelName);
+        sRet = mRet_spy();
+      } else {
+        mRet = mArr[i] != null ? mArr[i] : 0;
+        sRet = sArr[i] != null ? sArr[i] : 0;
+      }
+      mCum *= (1 + mRet/100);
+      sCum *= (1 + sRet/100);
+      labels.push(MO[i] + " '" + String(yr).slice(2) + (isLive ? '*' : ''));
+      modelNav.push(parseFloat(mCum.toFixed(2)));
+      spyNav.push(parseFloat(sCum.toFixed(2)));
+    }
+  });
+
+  // Drawdown
+  let peak = modelNav[0];
+  const drawdown = modelNav.map(v=>{ if(v>peak) peak=v; return parseFloat((-(peak-v)/peak*100).toFixed(2)); });
+
+  return { labels, modelNav, spyNav, drawdown };
+}
+
+// Current SPY MTD return (live)
+function mRet_spy(){
+  const p = S.prices['SPY'];
+  if(!p) return 0;
+  if(p.monthlyReturn != null) return p.monthlyReturn;
+  return p.monthOpen ? (p.price - p.monthOpen)/p.monthOpen*100 : 0;
+}
+
+function buildChartsHTML(){
+  return `
+  <div class="sec-card" style="padding:18px;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div>
+        <div style="font-size:14px;font-weight:700;">Growth of $100,000</div>
+        <div style="font-size:11px;color:var(--text-3);">vs SPY · Monthly compounded · * = live estimate</div>
+      </div>
+    </div>
+    <canvas id="growth-chart" style="width:100%;" height="260"></canvas>
+  </div>
+  <div class="sec-card" style="padding:18px;margin-bottom:16px;">
+    <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Drawdown <span style="font-size:11px;font-weight:400;color:var(--text-3);">— % below peak</span></div>
+    <canvas id="drawdown-chart" style="width:100%;" height="110"></canvas>
+  </div>
+  <div class="sec-card" style="padding:16px;" id="chart-stats-card">
+    <div style="font-size:10px;font-weight:700;color:var(--text-3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px;">Summary Statistics</div>
+    <div id="chart-stats-body" style="font-size:12px;color:var(--text-3);">Calculating…</div>
+  </div>`;
+}
+
+function renderCharts(){
+  if(typeof Chart === 'undefined'){ setTimeout(renderCharts, 300); return; }
+  const name = S.activeModel;
+  const { labels, modelNav, spyNav, drawdown } = buildNavSeries(name);
+
+  const NAVY='#1B2A4A', BLUE='#185FA5', GREY='#9aa0ad', RED='#c0392b';
+  const chartDefaults = {
+    responsive:true, maintainAspectRatio:true,
+    animation:{ duration:600 },
+    plugins:{ legend:{ labels:{ boxWidth:12, font:{size:11} } } },
+    scales:{
+      x:{ grid:{display:false}, ticks:{ font:{size:10}, maxTicksLimit:14, maxRotation:45 } }
+    }
+  };
+
+  // ── Growth chart ──
+  const ctx1 = document.getElementById('growth-chart');
+  if(ctx1){
+    _chartInstances.growth = new Chart(ctx1, {
+      type:'line',
+      data:{
+        labels,
+        datasets:[
+          {
+            label: name.length > 22 ? name.slice(0,22)+'…' : name,
+            data: modelNav,
+            borderColor: NAVY, backgroundColor:'rgba(27,42,74,0.07)',
+            borderWidth:2, pointRadius:0, tension:0.3, fill:true
+          },
+          {
+            label:'SPY',
+            data: spyNav,
+            borderColor: GREY, backgroundColor:'transparent',
+            borderWidth:1.5, borderDash:[5,4], pointRadius:0, tension:0.3
+          }
+        ]
+      },
+      options:{
+        ...chartDefaults,
+        plugins:{
+          ...chartDefaults.plugins,
+          tooltip:{
+            callbacks:{
+              label: ctx => ctx.dataset.label+': $'+ctx.parsed.y.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0})
+            }
+          }
+        },
+        scales:{
+          ...chartDefaults.scales,
+          y:{ ticks:{ callback: v=>'$'+(v/1000).toFixed(0)+'K', font:{size:10} } }
+        }
+      }
+    });
+  }
+
+  // ── Drawdown chart ──
+  const ctx2 = document.getElementById('drawdown-chart');
+  if(ctx2){
+    _chartInstances.drawdown = new Chart(ctx2, {
+      type:'line',
+      data:{
+        labels,
+        datasets:[{
+          label:'Drawdown',
+          data: drawdown,
+          borderColor: RED, backgroundColor:'rgba(192,57,43,0.1)',
+          borderWidth:1.5, pointRadius:0, tension:0.3, fill:true
+        }]
+      },
+      options:{
+        ...chartDefaults,
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: ctx=>ctx.parsed.y.toFixed(2)+'%' } } },
+        scales:{
+          ...chartDefaults.scales,
+          y:{ ticks:{ callback: v=>v.toFixed(0)+'%', font:{size:10} } }
+        }
+      }
+    });
+  }
+
+  // ── Stats card ──
+  const n = modelNav.length - 1;
+  const totalRet = (modelNav[n]-100000)/100000*100;
+  const spyTotalRet = (spyNav[n]-100000)/100000*100;
+  const alpha = totalRet - spyTotalRet;
+  const maxDD = Math.min(...drawdown);
+  const finalVal = modelNav[n].toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
+  const clr = v => v>=0?'var(--green)':'var(--red)';
+  const fmt = v => (v>=0?'+':'')+v.toFixed(2)+'%';
+  const statsEl = document.getElementById('chart-stats-body');
+  if(statsEl) statsEl.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;">
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:11px 13px;">
+        <div style="font-size:10px;color:var(--text-3);margin-bottom:3px;text-transform:uppercase;letter-spacing:.06em;">Total Return</div>
+        <div style="font-size:18px;font-weight:700;color:${clr(totalRet)};">${fmt(totalRet)}</div>
+      </div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:11px 13px;">
+        <div style="font-size:10px;color:var(--text-3);margin-bottom:3px;text-transform:uppercase;letter-spacing:.06em;">SPY Return</div>
+        <div style="font-size:18px;font-weight:700;color:${clr(spyTotalRet)};">${fmt(spyTotalRet)}</div>
+      </div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:11px 13px;">
+        <div style="font-size:10px;color:var(--text-3);margin-bottom:3px;text-transform:uppercase;letter-spacing:.06em;">Alpha</div>
+        <div style="font-size:18px;font-weight:700;color:${clr(alpha)};">${fmt(alpha)}</div>
+      </div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:11px 13px;">
+        <div style="font-size:10px;color:var(--text-3);margin-bottom:3px;text-transform:uppercase;letter-spacing:.06em;">Max Drawdown</div>
+        <div style="font-size:18px;font-weight:700;color:var(--red);">${maxDD.toFixed(2)}%</div>
+      </div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:11px 13px;">
+        <div style="font-size:10px;color:var(--text-3);margin-bottom:3px;text-transform:uppercase;letter-spacing:.06em;">Final Value</div>
+        <div style="font-size:18px;font-weight:700;color:var(--navy);">$${finalVal}</div>
+      </div>
+    </div>`;
 }
 
 init();
