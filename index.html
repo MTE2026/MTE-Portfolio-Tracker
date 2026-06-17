@@ -532,7 +532,26 @@ async function syncFromServer(){
     const r = await fetch(`${APPS_SCRIPT_URL}?action=getReturns`);
     if(!r.ok) return;
     const data = await r.json();
-    if(data && data.returns && Object.keys(data.returns).length){
+    if(!data) return;
+
+    // Merge watchlists from server — independent of returns data presence
+    if(data.etfWatch && Array.isArray(data.etfWatch) && data.etfWatch.length){
+      const local=JSON.parse(localStorage.getItem('mte_etf_watch')||'[]');
+      const merged=[...new Set([...local,...data.etfWatch])];
+      localStorage.setItem('mte_etf_watch',JSON.stringify(merged));
+    }
+    if(data.stkWatch && Array.isArray(data.stkWatch) && data.stkWatch.length){
+      const local=JSON.parse(localStorage.getItem('mte_stk_watch')||'[]');
+      const merged=[...new Set([...local,...data.stkWatch])];
+      localStorage.setItem('mte_stk_watch',JSON.stringify(merged));
+    }
+    // Merge cost basis independently too — rebalance-driven updates shouldn't depend on returns data
+    if(data.costBasis && Object.keys(data.costBasis).length){
+      Object.assign(S.costBasis, data.costBasis);
+      localStorage.setItem('mte_cost', JSON.stringify(S.costBasis));
+    }
+
+    if(data.returns && Object.keys(data.returns).length){
       Object.entries(data.returns).forEach(([model, years])=>{
         if(!S.returns[model]) S.returns[model]={};
         Object.entries(years).forEach(([year, arr])=>{
@@ -542,18 +561,6 @@ async function syncFromServer(){
       });
       if(data.locked) Object.assign(S.lockedMonths, data.locked);
       if(data.blends && Object.keys(data.blends).length) S.blends = data.blends;
-      if(data.costBasis && Object.keys(data.costBasis).length) Object.assign(S.costBasis, data.costBasis);
-      // Merge watchlists from server
-      if(data.etfWatch && Array.isArray(data.etfWatch)){
-        const local=JSON.parse(localStorage.getItem('mte_etf_watch')||'[]');
-        const merged=[...new Set([...local,...data.etfWatch])];
-        localStorage.setItem('mte_etf_watch',JSON.stringify(merged));
-      }
-      if(data.stkWatch && Array.isArray(data.stkWatch)){
-        const local=JSON.parse(localStorage.getItem('mte_stk_watch')||'[]');
-        const merged=[...new Set([...local,...data.stkWatch])];
-        localStorage.setItem('mte_stk_watch',JSON.stringify(merged));
-      }
       // Always merge SEED_MAY29 as base so mobile always has anchor prices
       S.monthEndPrices = {...SEED_MAY29, ...S.monthEndPrices};
       if(data.monthEndPrices && Object.keys(data.monthEndPrices).length){
@@ -562,9 +569,8 @@ async function syncFromServer(){
       localStorage.setItem('mte_returns', JSON.stringify(S.returns));
       localStorage.setItem('mte_locked', JSON.stringify(S.lockedMonths));
       localStorage.setItem('mte_mep', JSON.stringify(S.monthEndPrices));
-      localStorage.setItem('mte_cost', JSON.stringify(S.costBasis));
-      rerender();
     }
+    rerender();
   } catch(e){ console.log('Sync skipped:', e); }
 }
 
@@ -1442,6 +1448,8 @@ function confirmRB(){
   if(!S.editMode){ alert('Enable edit mode to confirm a rebalance.'); return; }
   const name=S.activeModel; const m=S.models.find(x=>x.name===name);
   const changes=[];
+  const costUpdates=[]; // {ticker, oldW, newW, oldCost, newCost}
+
   if(m.isBlend){
     const comps=S.blends[name]||[]; const tw=comps.reduce((a,x)=>a+x.w,0)||100;
     comps.forEach((c,i)=>{
@@ -1450,16 +1458,57 @@ function confirmRB(){
     });
   } else {
     const h=S.holdings[name]||[]; const tw=100; // use raw weights, not normalized
+    const tickersChanged=[];
     h.forEach((x,i)=>{
       const o=(x.w/tw*100).toFixed(1); const n=parseFloat(document.getElementById(`rb_${i}`)?.value)||0;
-      if(Math.abs(n-parseFloat(o))>0.05){ changes.push(`${x.t}: ${o}→${n}%`); x.w=n; }
+      if(Math.abs(n-parseFloat(o))>0.05){
+        changes.push(`${x.t}: ${o}→${n}%`);
+        tickersChanged.push({ticker:x.t, oldW:parseFloat(o), newW:n, idx:i});
+      }
     });
+    if(tickersChanged.length){
+      // Ask for the rebalance execution price for each changed ticker that INCREASED in weight
+      // (only increases require a cost-basis blend; decreases/closures don't need a price)
+      const increased=tickersChanged.filter(c=>c.newW>c.oldW);
+      const rebalancePrices={};
+      for(const c of increased){
+        const cbKey=`${name}|${c.ticker}`;
+        const currentMarketPrice=S.prices[c.ticker]?.price||0;
+        const promptDefault=currentMarketPrice>0?currentMarketPrice.toFixed(2):'';
+        const input=prompt(`Rebalance price for ${c.ticker} (weight ${c.oldW}%→${c.newW}%):`, promptDefault);
+        if(input===null){ alert('Rebalance cancelled.'); return; } // user hit Cancel — abort entire rebalance
+        const px=parseFloat(input);
+        if(!isNaN(px)&&px>0) rebalancePrices[c.ticker]=px;
+      }
+      // Apply weight changes + recalculate cost basis
+      tickersChanged.forEach(c=>{
+        h[c.idx].w=c.newW;
+        const cbKey=`${name}|${c.ticker}`;
+        const oldCost=S.costBasis[cbKey]||0;
+        if(c.newW>c.oldW && rebalancePrices[c.ticker]){
+          // Buying more — blend old cost basis with new purchase price, weighted by $ allocation
+          const newPx=rebalancePrices[c.ticker];
+          const newCost=oldCost>0
+            ? (c.oldW*oldCost + (c.newW-c.oldW)*newPx) / c.newW
+            : newPx; // no prior position — cost basis is just the entry price
+          S.costBasis[cbKey]=newCost;
+          costUpdates.push(`${c.ticker}: avg cost $${oldCost.toFixed(2)||'0.00'}→$${newCost.toFixed(2)}`);
+        } else if(c.newW===0){
+          // Position fully closed — clear cost basis
+          delete S.costBasis[cbKey];
+          costUpdates.push(`${c.ticker}: position closed, cost basis cleared`);
+        }
+        // newW < oldW (partial trim): average cost basis is unchanged — no action needed
+      });
+    }
   }
   if(!changes.length){ alert('No changes.'); return; }
   const hist=JSON.parse(localStorage.getItem('mte_rb_'+name)||'[]');
-  const d=new Date(); hist.push({date:`${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`,changes:changes.join(' · ')});
+  const d=new Date();
+  const fullLog=costUpdates.length?changes.join(' · ')+' | Cost basis: '+costUpdates.join(' · '):changes.join(' · ');
+  hist.push({date:`${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`,changes:fullLog});
   localStorage.setItem('mte_rb_'+name,JSON.stringify(hist));
-  save(); renderDetail(); alert('✓ Rebalance logged.');
+  save(); renderDetail(); alert('✓ Rebalance logged.'+(costUpdates.length?' Avg cost updated for '+costUpdates.length+' holding(s).':''));
 }
 
 // ADD MODEL
@@ -2056,6 +2105,25 @@ function renderScanner(){
   const type=SCANNER.type;
   const {portfolio,watchlist}=getScannerList(type);
   const list=SCANNER.tab==='portfolio'?portfolio:watchlist;
+
+  // Fetch live prices for any tickers missing from S.prices (e.g. watchlist tickers after reload)
+  const missingPrices=[...new Set([...list,'SPY'])].filter(t=>!S.prices[t]||!S.prices[t].price);
+  if(missingPrices.length){
+    fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(missingPrices.join(','))}`)
+      .then(r=>r.ok?r.json():null)
+      .then(asData=>{
+        if(asData && typeof asData==='object'){
+          missingPrices.forEach(t=>{ if(asData[t]&&asData[t].success) S.prices[t]=parseASQuote(t,asData[t]); });
+        }
+        const stillMissing=missingPrices.filter(t=>!S.prices[t]||!S.prices[t].price);
+        return Promise.all(stillMissing.map(t=>fetchPriceDirect(t).then(p=>{ if(p&&p.price) S.prices[t]=p; })));
+      })
+      .catch(()=>Promise.all(missingPrices.map(t=>fetchPriceDirect(t).then(p=>{ if(p&&p.price) S.prices[t]=p; }))))
+      .then(()=>{
+        const inp=document.getElementById('scanner-add-inp');
+        if(!inp||document.activeElement!==inp){ if(S.activeView==='scanner') renderScanner(); }
+      });
+  }
 
   // Fetch Dec31 2025 prices for tickers not yet cached — only trigger once
   const missing=[...new Set([...list,'SPY'])].filter(t=>!DEC31_CACHE[t]);
