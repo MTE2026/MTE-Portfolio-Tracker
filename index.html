@@ -520,6 +520,7 @@ function init() {
   S.yields = JSON.parse(localStorage.getItem('mte_yields') || 'null') || KNOWN_YIELDS;
   S.costBasis = JSON.parse(localStorage.getItem('mte_cost') || '{}');
   S.modelCategories = JSON.parse(localStorage.getItem('mte_model_cats') || '{}');
+  S.modelAnchorPrices = JSON.parse(localStorage.getItem('mte_model_anchors') || '{}');
   S.monthEndPrices = {...SEED_MAY29, ...JSON.parse(localStorage.getItem('mte_mep') || '{}') };
   renderSidebar();
   showOverview();
@@ -567,6 +568,12 @@ async function syncFromServer(){
     if(data.modelCategories && typeof data.modelCategories==='object' && Object.keys(data.modelCategories).length){
       Object.assign(S.modelCategories, data.modelCategories);
       localStorage.setItem('mte_model_cats', JSON.stringify(S.modelCategories));
+    }
+    if(data.modelAnchorPrices && typeof data.modelAnchorPrices==='object' && Object.keys(data.modelAnchorPrices).length){
+      Object.entries(data.modelAnchorPrices).forEach(([modelName, anchors])=>{
+        if(!S.modelAnchorPrices[modelName]) S.modelAnchorPrices[modelName]=anchors;
+      });
+      localStorage.setItem('mte_model_anchors', JSON.stringify(S.modelAnchorPrices));
     }
 
     if(data.returns && Object.keys(data.returns).length){
@@ -687,17 +694,28 @@ async function loadPrices() {
       }
     }).catch(()=>{});
 
-  // Use Apps Script exclusively for accurate data
-  try {
-    const r = await fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(tickers.join(','))}`);
-    if(r.ok){
-      const asData = await r.json();
-      if(asData && typeof asData === 'object'){
-        tickers.forEach(t=>{ if(asData[t]&&asData[t].success) S.prices[t]=parseASQuote(t,asData[t]); });
-      }
-    }
-  } catch(e){ console.warn('Apps Script failed:', e); }
+  // Batch into chunks to avoid Apps Script execution timeout / browser fetch timeout
+  // with large portfolios (e.g. 150+ tickers). Chunks run in parallel.
+  const CHUNK_SIZE = 25;
+  const chunks = [];
+  for(let i=0;i<tickers.length;i+=CHUNK_SIZE) chunks.push(tickers.slice(i,i+CHUNK_SIZE));
 
+  let completedChunks = 0;
+  const chunkPromises = chunks.map(chunk =>
+    fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(chunk.join(','))}`)
+      .then(r=>r.ok?r.json():null)
+      .then(asData=>{
+        if(asData && typeof asData === 'object'){
+          chunk.forEach(t=>{ if(asData[t]&&asData[t].success) S.prices[t]=parseASQuote(t,asData[t]); });
+        }
+        completedChunks++;
+        document.getElementById('status-txt').textContent=`Loading prices… (${completedChunks}/${chunks.length})`;
+        rerender(); // progressively show prices as each chunk lands
+      })
+      .catch(e=>{ console.warn('Chunk failed:', e); completedChunks++; })
+  );
+
+  await Promise.all(chunkPromises);
   await vixPromise;
   document.getElementById('status-txt').textContent='Updated '+new Date().toLocaleTimeString();
   document.getElementById('status-dot').style.background='#27ae60';
@@ -896,7 +914,10 @@ function driftedW(ticker,modelName){
   const h=S.holdings[modelName]||[];
   // Use raw weight (not normalized) to preserve leverage
   const tgt=(h.find(x=>x.t===ticker)||{w:0}).w;
-  const anchor=S.monthEndPrices[ticker]||S.may29[ticker];
+  // New models get a per-model anchor set at creation time (today's price),
+  // so their drift starts from their join date, not the global last-lock date.
+  const modelAnchors = S.modelAnchorPrices?.[modelName];
+  const anchor = (modelAnchors && modelAnchors[ticker]) || S.monthEndPrices[ticker] || S.may29[ticker];
   const p=S.prices[ticker];
   if(!anchor||!p||!anchor) return tgt;
   return tgt*(1+(p.price-anchor)/anchor);
@@ -950,7 +971,8 @@ async function syncHistoricalToServer(){
       stkWatch: JSON.stringify(stkWatch),
       models: JSON.stringify(S.models),
       holdings: JSON.stringify(S.holdings),
-      modelCategories: JSON.stringify(S.modelCategories)
+      modelCategories: JSON.stringify(S.modelCategories),
+      modelAnchorPrices: JSON.stringify(S.modelAnchorPrices)
     });
     const r = await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
     const data = await r.json();
@@ -1375,7 +1397,17 @@ function addH(){
   S.holdings[S.activeModel].push({t,w});
   if(y) S.yields[t]=y;
   document.getElementById('add-t').value=''; document.getElementById('add-w').value=''; document.getElementById('add-y').value='';
-  fetchPrice(t).then(p=>{S.prices[t]=p;save();renderSubTab();});
+  fetchPrice(t).then(p=>{
+    S.prices[t]=p;
+    // If this model has no anchor yet for this ticker, set it now — so a brand-new
+    // model's drift starts from today, not the last global lock-month date.
+    if(!S.modelAnchorPrices[S.activeModel]) S.modelAnchorPrices[S.activeModel]={};
+    if(!S.modelAnchorPrices[S.activeModel][t] && p && p.price){
+      S.modelAnchorPrices[S.activeModel][t]=p.price;
+      localStorage.setItem('mte_model_anchors', JSON.stringify(S.modelAnchorPrices));
+    }
+    save();renderSubTab();
+  });
 }
 function normalizeW(){
   const h=S.holdings[S.activeModel]; if(!h) return;
@@ -1545,7 +1577,11 @@ function addModelUI(){
   const isBlend=confirm('Is this a blended model?\nOK = Blend · Cancel = Direct');
   S.models.push({name:name.trim(),isBlend});
   if(isBlend) S.blends[name.trim()]=[];
-  else S.holdings[name.trim()]=[];
+  else {
+    S.holdings[name.trim()]=[];
+    S.modelAnchorPrices[name.trim()]={}; // anchors fill in as holdings are added via Holdings tab
+    localStorage.setItem('mte_model_anchors', JSON.stringify(S.modelAnchorPrices));
+  }
   save(); renderSidebar(); showModel(name.trim());
 }
 
@@ -1607,10 +1643,39 @@ function parseModelCsv(text){
   S.holdings[modelName]=holdings;
   costEntries.forEach(c=>{ S.costBasis[`${modelName}|${c.ticker}`]=c.avgCost; });
 
+  // Capture today's price as this model's anchor for each ticker, so WTD/MTD
+  // drift calculations start from creation date, not the global last-lock date.
+  if(!S.modelAnchorPrices[modelName]) S.modelAnchorPrices[modelName]={};
+  holdings.forEach(h=>{
+    const p=S.prices[h.t];
+    if(p && p.price) S.modelAnchorPrices[modelName][h.t]=p.price;
+  });
+  localStorage.setItem('mte_model_anchors', JSON.stringify(S.modelAnchorPrices));
+
   localStorage.setItem('mte_model_cats', JSON.stringify(S.modelCategories));
   save();
   renderSidebar();
   showModel(modelName);
+
+  // Fetch prices for any new tickers not already loaded, then backfill anchor for those too
+  const missingTickers=holdings.map(h=>h.t).filter(t=>!S.prices[t]||!S.prices[t].price);
+  if(missingTickers.length){
+    fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(missingTickers.join(','))}`)
+      .then(r=>r.ok?r.json():null)
+      .then(asData=>{
+        if(asData && typeof asData==='object'){
+          missingTickers.forEach(t=>{
+            if(asData[t]&&asData[t].success){
+              S.prices[t]=parseASQuote(t,asData[t]);
+              S.modelAnchorPrices[modelName][t]=S.prices[t].price;
+            }
+          });
+          localStorage.setItem('mte_model_anchors', JSON.stringify(S.modelAnchorPrices));
+          if(S.activeView==='detail'||S.activeView==='overview') rerender();
+        }
+      }).catch(()=>{});
+  }
+
   alert(`✓ Uploaded ${holdings.length} holdings to "${modelName}"${costEntries.length?` with avg cost set for ${costEntries.length} ticker(s)`:''}.${skipped?`\n${skipped} row(s) skipped (invalid ticker/weight).`:''}\n\nRemember to click "Sync Data" to share this with other devices.`);
 }
 
