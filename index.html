@@ -862,10 +862,12 @@ function currentMonthDrift(name){
     return comps.reduce((acc,c)=>acc+(c.w/100)*currentMonthDrift(c.m),0);
   }
   const h=S.holdings[name]||[]; if(!h.length) return 0;
-  // Try anchor-based drift first (more accurate for YTD)
+  const modelAnchors = S.modelAnchorPrices?.[name];
+  // Try anchor-based drift first (more accurate for YTD) — prefer per-model
+  // anchor (set at model creation) over the global last-lock-month anchor.
   let anchorDrift=0, hasAnchor=false;
   h.forEach(x=>{
-    const anchor=S.monthEndPrices[x.t]||S.may29[x.t];
+    const anchor=(modelAnchors && modelAnchors[x.t]) || S.monthEndPrices[x.t]||S.may29[x.t];
     const p=S.prices[x.t];
     if(anchor&&p&&p.price&&anchor>0){ anchorDrift+=(x.w/100)*((p.price-anchor)/anchor*100); hasAnchor=true; }
   });
@@ -1658,22 +1660,31 @@ function parseModelCsv(text){
   showModel(modelName);
 
   // Fetch prices for any new tickers not already loaded, then backfill anchor for those too
+  // Chunked to avoid timeout on large uploads (e.g. 174-holding models)
   const missingTickers=holdings.map(h=>h.t).filter(t=>!S.prices[t]||!S.prices[t].price);
   if(missingTickers.length){
-    fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(missingTickers.join(','))}`)
-      .then(r=>r.ok?r.json():null)
-      .then(asData=>{
-        if(asData && typeof asData==='object'){
-          missingTickers.forEach(t=>{
-            if(asData[t]&&asData[t].success){
-              S.prices[t]=parseASQuote(t,asData[t]);
-              S.modelAnchorPrices[modelName][t]=S.prices[t].price;
-            }
-          });
-          localStorage.setItem('mte_model_anchors', JSON.stringify(S.modelAnchorPrices));
-          if(S.activeView==='detail'||S.activeView==='overview') rerender();
-        }
-      }).catch(()=>{});
+    const ANCHOR_CHUNK_SIZE=25;
+    const anchorChunks=[];
+    for(let i=0;i<missingTickers.length;i+=ANCHOR_CHUNK_SIZE) anchorChunks.push(missingTickers.slice(i,i+ANCHOR_CHUNK_SIZE));
+
+    Promise.all(anchorChunks.map(chunk=>
+      fetch(`${APPS_SCRIPT_URL}?action=fetchQuotes&tickers=${encodeURIComponent(chunk.join(','))}`)
+        .then(r=>r.ok?r.json():null)
+        .then(asData=>{
+          if(asData && typeof asData==='object'){
+            chunk.forEach(t=>{
+              if(asData[t]&&asData[t].success){
+                S.prices[t]=parseASQuote(t,asData[t]);
+                S.modelAnchorPrices[modelName][t]=S.prices[t].price;
+              }
+            });
+          }
+        }).catch(e=>console.warn('Anchor backfill chunk failed:',e))
+    )).then(()=>{
+      localStorage.setItem('mte_model_anchors', JSON.stringify(S.modelAnchorPrices));
+      save();
+      if(S.activeView==='detail'||S.activeView==='overview') rerender();
+    });
   }
 
   alert(`✓ Uploaded ${holdings.length} holdings to "${modelName}"${costEntries.length?` with avg cost set for ${costEntries.length} ticker(s)`:''}.${skipped?`\n${skipped} row(s) skipped (invalid ticker/weight).`:''}\n\nRemember to click "Sync Data" to share this with other devices.`);
