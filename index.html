@@ -551,6 +551,19 @@ async function syncFromServer(){
       localStorage.setItem('mte_cost', JSON.stringify(S.costBasis));
     }
 
+    // Merge models + holdings from server — new models added on other devices become visible here
+    if(data.models && Array.isArray(data.models) && data.models.length){
+      const localNames=new Set(S.models.map(m=>m.name));
+      data.models.forEach(m=>{ if(!localNames.has(m.name)) S.models.push(m); });
+      localStorage.setItem('mte_models', JSON.stringify(S.models));
+    }
+    if(data.holdings && typeof data.holdings==='object' && Object.keys(data.holdings).length){
+      Object.entries(data.holdings).forEach(([modelName, h])=>{
+        if(!S.holdings[modelName]) S.holdings[modelName]=h; // only fill in if missing locally
+      });
+      localStorage.setItem('mte_holdings', JSON.stringify(S.holdings));
+    }
+
     if(data.returns && Object.keys(data.returns).length){
       Object.entries(data.returns).forEach(([model, years])=>{
         if(!S.returns[model]) S.returns[model]={};
@@ -929,7 +942,9 @@ async function syncHistoricalToServer(){
       blends: JSON.stringify(S.blends),
       costBasis: JSON.stringify(S.costBasis),
       etfWatch: JSON.stringify(etfWatch),
-      stkWatch: JSON.stringify(stkWatch)
+      stkWatch: JSON.stringify(stkWatch),
+      models: JSON.stringify(S.models),
+      holdings: JSON.stringify(S.holdings)
     });
     const r = await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
     const data = await r.json();
