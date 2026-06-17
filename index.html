@@ -843,6 +843,22 @@ function wRet_model(name,fn){
   const h=S.holdings[name]||[]; if(!h.length) return 0;
   return h.reduce((acc,x)=>acc+(x.w/100)*fn(x.t),0);
 }
+// Model-aware MTD: uses per-model anchor (set at model creation) instead of
+// each ticker's global calendar-month return, so new models start at 0% MTD.
+function mRet_model(name){
+  const h=S.holdings[name]||[]; if(!h.length) return 0;
+  const modelAnchors = S.modelAnchorPrices?.[name];
+  if(!modelAnchors || !Object.keys(modelAnchors).length){
+    // No per-model anchor recorded — fall back to ticker-level calendar MTD
+    return h.reduce((acc,x)=>acc+(x.w/100)*mRet(x.t),0);
+  }
+  return h.reduce((acc,x)=>{
+    const anchor=modelAnchors[x.t];
+    const p=S.prices[x.t];
+    if(anchor && p && p.price && anchor>0) return acc+(x.w/100)*((p.price-anchor)/anchor*100);
+    return acc+(x.w/100)*mRet(x.t); // per-ticker fallback if this specific ticker has no anchor
+  },0);
+}
 function blendRet(name,fn){
   const comps=S.blends[name]||[]; if(!comps.length) return 0;
   // Use raw weight/100 — preserves leverage if blend weights sum to >100%
@@ -850,6 +866,7 @@ function blendRet(name,fn){
 }
 function getModelRet(name,fn){
   const m=S.models.find(x=>x.name===name); if(!m) return 0;
+  if(fn===mRet) return m.isBlend?blendRet(name,mRet):mRet_model(name);
   return m.isBlend?blendRet(name,fn):wRet_model(name,fn);
 }
 
