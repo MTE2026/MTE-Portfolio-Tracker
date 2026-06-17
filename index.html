@@ -522,6 +522,7 @@ function init() {
   S.costBasis = JSON.parse(localStorage.getItem('mte_cost') || '{}');
   S.modelCategories = JSON.parse(localStorage.getItem('mte_model_cats') || '{}');
   S.modelAnchorPrices = JSON.parse(localStorage.getItem('mte_model_anchors') || '{}');
+  S.modelAnchorTimestamps = JSON.parse(localStorage.getItem('mte_model_anchor_ts') || '{}');
   S.monthEndPrices = {...SEED_MAY29, ...JSON.parse(localStorage.getItem('mte_mep') || '{}') };
   renderSidebar();
   showOverview();
@@ -575,6 +576,12 @@ async function syncFromServer(){
         if(!S.modelAnchorPrices[modelName]) S.modelAnchorPrices[modelName]=anchors;
       });
       localStorage.setItem('mte_model_anchors', JSON.stringify(S.modelAnchorPrices));
+    }
+    if(data.modelAnchorTimestamps && typeof data.modelAnchorTimestamps==='object' && Object.keys(data.modelAnchorTimestamps).length){
+      Object.entries(data.modelAnchorTimestamps).forEach(([modelName, ts])=>{
+        if(!S.modelAnchorTimestamps[modelName]) S.modelAnchorTimestamps[modelName]=ts;
+      });
+      localStorage.setItem('mte_model_anchor_ts', JSON.stringify(S.modelAnchorTimestamps));
     }
 
     if(data.returns && Object.keys(data.returns).length){
@@ -843,21 +850,41 @@ function wRet_model(name,fn){
   const h=S.holdings[name]||[]; if(!h.length) return 0;
   return h.reduce((acc,x)=>acc+(x.w/100)*fn(x.t),0);
 }
-// Model-aware MTD: uses per-model anchor (set at model creation) instead of
-// each ticker's global calendar-month return, so new models start at 0% MTD.
-function mRet_model(name){
+// Model-aware return calc: if the model's anchor was set AFTER the natural
+// period start (e.g. model created mid-week, after this Monday), use the
+// anchor instead — so Daily/WTD/MTD/YTD all equal each other on launch day.
+// Once enough real time passes that the model existed before the period
+// start, this falls through to the normal ticker-level calendar return.
+function modelAwareRet(name, anchorFallbackFn, periodIsNewerThanAnchor){
   const h=S.holdings[name]||[]; if(!h.length) return 0;
   const modelAnchors = S.modelAnchorPrices?.[name];
-  if(!modelAnchors || !Object.keys(modelAnchors).length){
-    // No per-model anchor recorded — fall back to ticker-level calendar MTD
-    return h.reduce((acc,x)=>acc+(x.w/100)*mRet(x.t),0);
+  if(!modelAnchors || !periodIsNewerThanAnchor){
+    return h.reduce((acc,x)=>acc+(x.w/100)*anchorFallbackFn(x.t),0);
   }
   return h.reduce((acc,x)=>{
     const anchor=modelAnchors[x.t];
     const p=S.prices[x.t];
     if(anchor && p && p.price && anchor>0) return acc+(x.w/100)*((p.price-anchor)/anchor*100);
-    return acc+(x.w/100)*mRet(x.t); // per-ticker fallback if this specific ticker has no anchor
+    return acc+(x.w/100)*anchorFallbackFn(x.t);
   },0);
+}
+function modelCreatedAfter(name, periodStartDate){
+  const anchorTs = S.modelAnchorTimestamps?.[name];
+  if(!anchorTs) return false; // unknown creation time — don't override, use normal calc
+  return new Date(anchorTs) > periodStartDate;
+}
+function dRet_model(name){
+  const now=new Date(); const todayStart=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+  return modelAwareRet(name, dRet, modelCreatedAfter(name, todayStart));
+}
+function wRet_model_anchored(name){
+  const now=new Date(); const dow=now.getDay(); const daysToMon=dow===0?6:dow-1;
+  const monStart=new Date(now); monStart.setDate(now.getDate()-daysToMon); monStart.setHours(0,0,0,0);
+  return modelAwareRet(name, wRet, modelCreatedAfter(name, monStart));
+}
+function mRet_model(name){
+  const now=new Date(); const monthStart=new Date(now.getFullYear(),now.getMonth(),1);
+  return modelAwareRet(name, mRet, modelCreatedAfter(name, monthStart));
 }
 function blendRet(name,fn){
   const comps=S.blends[name]||[]; if(!comps.length) return 0;
@@ -867,6 +894,8 @@ function blendRet(name,fn){
 function getModelRet(name,fn){
   const m=S.models.find(x=>x.name===name); if(!m) return 0;
   if(fn===mRet) return m.isBlend?blendRet(name,mRet):mRet_model(name);
+  if(fn===dRet) return m.isBlend?blendRet(name,dRet):dRet_model(name);
+  if(fn===wRet) return m.isBlend?blendRet(name,wRet):wRet_model_anchored(name);
   return m.isBlend?blendRet(name,fn):wRet_model(name,fn);
 }
 
@@ -992,7 +1021,8 @@ async function syncHistoricalToServer(){
       models: JSON.stringify(S.models),
       holdings: JSON.stringify(S.holdings),
       modelCategories: JSON.stringify(S.modelCategories),
-      modelAnchorPrices: JSON.stringify(S.modelAnchorPrices)
+      modelAnchorPrices: JSON.stringify(S.modelAnchorPrices),
+      modelAnchorTimestamps: JSON.stringify(S.modelAnchorTimestamps)
     });
     const r = await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
     const data = await r.json();
@@ -1428,7 +1458,9 @@ function addH(){
     if(!S.modelAnchorPrices[S.activeModel]) S.modelAnchorPrices[S.activeModel]={};
     if(!S.modelAnchorPrices[S.activeModel][t] && p && p.price){
       S.modelAnchorPrices[S.activeModel][t]=p.price;
+      if(!S.modelAnchorTimestamps[S.activeModel]) S.modelAnchorTimestamps[S.activeModel]=Date.now();
       localStorage.setItem('mte_model_anchors', JSON.stringify(S.modelAnchorPrices));
+      localStorage.setItem('mte_model_anchor_ts', JSON.stringify(S.modelAnchorTimestamps));
     }
     save();renderSubTab();
   });
@@ -1602,11 +1634,13 @@ function deleteModel(name){
   delete S.blends[name];
   delete S.modelCategories[name];
   delete S.modelAnchorPrices[name];
+  delete S.modelAnchorTimestamps[name];
   Object.keys(S.costBasis).forEach(k=>{ if(k.startsWith(`${name}|`)) delete S.costBasis[k]; });
   localStorage.removeItem('mte_rb_'+name);
 
   localStorage.setItem('mte_model_cats', JSON.stringify(S.modelCategories));
   localStorage.setItem('mte_model_anchors', JSON.stringify(S.modelAnchorPrices));
+  localStorage.setItem('mte_model_anchor_ts', JSON.stringify(S.modelAnchorTimestamps));
   save();
   renderSidebar();
   showOverview();
@@ -1680,7 +1714,8 @@ function parseModelCsv(text){
   }
 
   const catChoice=prompt(`Where should "${modelName}" appear?\nType: custom, stock, or other`, 'other');
-  const cat=(catChoice||'other').trim().toLowerCase();
+  const catRaw=(catChoice||'other').trim().toLowerCase();
+  const cat = catRaw.includes('custom') ? 'custom' : catRaw.includes('stock') ? 'stock' : 'other';
   if(cat==='custom'||cat==='stock') S.modelCategories[modelName]=cat;
   else delete S.modelCategories[modelName];
 
@@ -1694,7 +1729,9 @@ function parseModelCsv(text){
     const p=S.prices[h.t];
     if(p && p.price) S.modelAnchorPrices[modelName][h.t]=p.price;
   });
+  S.modelAnchorTimestamps[modelName]=Date.now();
   localStorage.setItem('mte_model_anchors', JSON.stringify(S.modelAnchorPrices));
+  localStorage.setItem('mte_model_anchor_ts', JSON.stringify(S.modelAnchorTimestamps));
 
   localStorage.setItem('mte_model_cats', JSON.stringify(S.modelCategories));
   save();
