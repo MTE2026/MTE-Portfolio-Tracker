@@ -519,6 +519,7 @@ function init() {
   S.lockedMonths = JSON.parse(localStorage.getItem('mte_locked') || '{}');
   S.yields = JSON.parse(localStorage.getItem('mte_yields') || 'null') || KNOWN_YIELDS;
   S.costBasis = JSON.parse(localStorage.getItem('mte_cost') || '{}');
+  S.modelCategories = JSON.parse(localStorage.getItem('mte_model_cats') || '{}');
   S.monthEndPrices = {...SEED_MAY29, ...JSON.parse(localStorage.getItem('mte_mep') || '{}') };
   renderSidebar();
   showOverview();
@@ -562,6 +563,10 @@ async function syncFromServer(){
         if(!S.holdings[modelName]) S.holdings[modelName]=h; // only fill in if missing locally
       });
       localStorage.setItem('mte_holdings', JSON.stringify(S.holdings));
+    }
+    if(data.modelCategories && typeof data.modelCategories==='object' && Object.keys(data.modelCategories).length){
+      Object.assign(S.modelCategories, data.modelCategories);
+      localStorage.setItem('mte_model_cats', JSON.stringify(S.modelCategories));
     }
 
     if(data.returns && Object.keys(data.returns).length){
@@ -944,7 +949,8 @@ async function syncHistoricalToServer(){
       etfWatch: JSON.stringify(etfWatch),
       stkWatch: JSON.stringify(stkWatch),
       models: JSON.stringify(S.models),
-      holdings: JSON.stringify(S.holdings)
+      holdings: JSON.stringify(S.holdings),
+      modelCategories: JSON.stringify(S.modelCategories)
     });
     const r = await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
     const data = await r.json();
@@ -1060,8 +1066,10 @@ function renderOverview(){
   const spyYTD=benchYTD('SPY');
 
   // Model groups
-  const CUSTOM_MODELS = ['Conservative','Aggressive Regular','Aggressive Margin','Balanced Growth + Yield (IBKR)','Balanced Growth + Yield (Schwab)','MTI 2025','MDA','<10K','<50K'];
-  const STOCK_MODELS  = ['All Weather Core','All Weather Momentum','High Beta Tech','Nasdaq Select 15'];
+  const CUSTOM_MODELS = ['Conservative','Aggressive Regular','Aggressive Margin','Balanced Growth + Yield (IBKR)','Balanced Growth + Yield (Schwab)','MTI 2025','MDA','<10K','<50K',
+    ...S.models.filter(m=>S.modelCategories[m.name]==='custom').map(m=>m.name)];
+  const STOCK_MODELS  = ['All Weather Core','All Weather Momentum','High Beta Tech','Nasdaq Select 15',
+    ...S.models.filter(m=>S.modelCategories[m.name]==='stock').map(m=>m.name)];
 
   function modelRow(m){
     const d=getModelRet(m.name,dRet);
@@ -1531,12 +1539,79 @@ function confirmRB(){
 // ADD MODEL
 function addModelUI(){
   if(!S.editMode){ alert('Enable edit mode to add models.'); return; }
+  const useCsv = confirm('Upload holdings via CSV file?\nOK = Upload CSV · Cancel = Add manually');
+  if(useCsv){ triggerCsvModelUpload(); return; }
   const name=prompt('Model name:'); if(!name) return;
   const isBlend=confirm('Is this a blended model?\nOK = Blend · Cancel = Direct');
   S.models.push({name:name.trim(),isBlend});
   if(isBlend) S.blends[name.trim()]=[];
   else S.holdings[name.trim()]=[];
   save(); renderSidebar(); showModel(name.trim());
+}
+
+function triggerCsvModelUpload(){
+  const input=document.createElement('input');
+  input.type='file';
+  input.accept='.csv';
+  input.onchange=(e)=>{
+    const file=e.target.files[0];
+    if(!file) return;
+    const reader=new FileReader();
+    reader.onload=(ev)=>parseModelCsv(ev.target.result);
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+function parseModelCsv(text){
+  // Expected columns: Ticker, Weight%, Avg Cost  (header row optional, auto-detected)
+  const lines=text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length);
+  if(!lines.length){ alert('CSV is empty.'); return; }
+
+  let rows=lines.map(l=>l.split(',').map(c=>c.trim()));
+  // Detect and skip header row if first cell isn't a plausible ticker (e.g. contains "ticker" text)
+  if(/ticker/i.test(rows[0][0])) rows=rows.slice(1);
+
+  const holdings=[];
+  const costEntries=[];
+  let skipped=0;
+  rows.forEach(r=>{
+    const ticker=(r[0]||'').toUpperCase().replace(/[^A-Z0-9.\-^]/g,'');
+    const weight=parseFloat(r[1]);
+    const avgCost=parseFloat(r[2]);
+    if(!ticker || isNaN(weight)){ skipped++; return; }
+    holdings.push({t:ticker, w:weight});
+    if(!isNaN(avgCost) && avgCost>0) costEntries.push({ticker, avgCost});
+  });
+
+  if(!holdings.length){ alert('No valid rows found. Expected columns: Ticker, Weight%, Avg Cost'); return; }
+
+  const totalWeight=holdings.reduce((a,h)=>a+h.w,0);
+  const weightWarning = Math.abs(totalWeight-100)>1 ? `\n\n⚠ Weights sum to ${totalWeight.toFixed(1)}%, not 100%. They'll be saved as-is — you can adjust later in Rebalance.` : '';
+
+  const name=prompt(`Model name for this ${holdings.length}-holding upload:`+weightWarning);
+  if(!name || !name.trim()) return;
+  const modelName=name.trim();
+
+  if(S.models.find(m=>m.name===modelName)){
+    if(!confirm(`A model named "${modelName}" already exists. Overwrite its holdings?`)) return;
+  } else {
+    S.models.push({name:modelName, isBlend:false});
+  }
+
+  const catChoice=prompt(`Where should "${modelName}" appear?\nType: custom, stock, or other`, 'other');
+  const cat=(catChoice||'other').trim().toLowerCase();
+  if(cat==='custom'||cat==='stock') S.modelCategories[modelName]=cat;
+  else delete S.modelCategories[modelName];
+
+  S.holdings[modelName]=holdings;
+  costEntries.forEach(c=>{ S.costBasis[`${modelName}|${c.ticker}`]=c.avgCost; });
+
+  localStorage.setItem('mte_model_cats', JSON.stringify(S.modelCategories));
+  save();
+  renderSidebar();
+  showModel(modelName);
+  alert(`✓ Uploaded ${holdings.length} holdings to "${modelName}"${costEntries.length?` with avg cost set for ${costEntries.length} ticker(s)`:''}.${skipped?`\n${skipped} row(s) skipped (invalid ticker/weight).`:''}\n\nRemember to click "Sync Data" to share this with other devices.`);
 }
 
 // EDIT MODE
