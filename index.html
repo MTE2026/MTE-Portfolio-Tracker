@@ -381,6 +381,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
       <button class="btn btn-outline" onclick="refreshPrices()">↻ Refresh</button>
       <button class="btn btn-orange mobile-hide" onclick="showLockModal()" title="Lock current month's returns">🔒 Lock Month</button>
       <button class="btn btn-outline mobile-hide" id="sync-btn" onclick="syncHistoricalToServer()" title="Push all historical returns to server for cross-device sync" style="font-size:11px;">⬆ Sync Data</button>
+      <button class="btn btn-outline" id="delete-model-btn" style="display:none;color:#c0392b;border-color:#c0392b;" onclick="deleteModel(S.activeModel)" title="Delete this model">🗑 Delete</button>
       <button class="btn btn-navy" id="edit-btn" onclick="toggleEdit()">Edit</button>
     </div>
   </div>
@@ -1050,6 +1051,8 @@ function showOverview(){
   document.getElementById('tb-title').textContent='Portfolio Overview';
   document.getElementById('tb-sub').textContent=`${S.models.length} models · Live prices · MTE Internal`;
   document.getElementById('back-btn').style.display='none';
+  const delBtn=document.getElementById('delete-model-btn');
+  if(delBtn) delBtn.style.display='none';
   document.getElementById('nav-etf').className='sb-nav-item';
   document.getElementById('nav-stk').className='sb-nav-item';
   closeSidebar();
@@ -1206,6 +1209,8 @@ function showModel(name){
   // Show back button on mobile
   const backBtn=document.getElementById('back-btn');
   if(backBtn) backBtn.style.display='';
+  const delBtn=document.getElementById('delete-model-btn');
+  if(delBtn) delBtn.style.display='';
   closeSidebar();
   renderSidebar(); renderDetail();
 }
@@ -1571,6 +1576,26 @@ function confirmRB(){
 }
 
 // ADD MODEL
+function deleteModel(name){
+  if(!S.editMode){ alert('Enable edit mode to delete models.'); return; }
+  if(!confirm(`Delete "${name}" permanently?\n\nThis removes its holdings, cost basis, anchor prices, and rebalance history. This cannot be undone locally, and won't reflect on other devices until you click Sync Data.`)) return;
+
+  S.models = S.models.filter(m=>m.name!==name);
+  delete S.holdings[name];
+  delete S.blends[name];
+  delete S.modelCategories[name];
+  delete S.modelAnchorPrices[name];
+  Object.keys(S.costBasis).forEach(k=>{ if(k.startsWith(`${name}|`)) delete S.costBasis[k]; });
+  localStorage.removeItem('mte_rb_'+name);
+
+  localStorage.setItem('mte_model_cats', JSON.stringify(S.modelCategories));
+  localStorage.setItem('mte_model_anchors', JSON.stringify(S.modelAnchorPrices));
+  save();
+  renderSidebar();
+  showOverview();
+  alert(`✓ "${name}" deleted locally. Click Sync Data to remove it from other devices too.`);
+}
+
 function addModelUI(){
   if(!S.editMode){ alert('Enable edit mode to add models.'); return; }
   const useCsv = confirm('Upload holdings via CSV file?\nOK = Upload CSV · Cancel = Add manually');
