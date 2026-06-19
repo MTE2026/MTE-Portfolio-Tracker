@@ -1799,8 +1799,7 @@ function closePwd(){
 }
 
 // ━━━ RESEARCH MODAL ━━━━━━━━━━━━━━━━━━━━━━━━━━
-const GEMINI_KEY = 'AIzaSyB3oKJrjD5_1R2iD9tTGap0dRf208vk7g0';
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
+// Removed: hardcoded Gemini key and unused GEMINI_URL (was a public key leak; not referenced anywhere).
 
 let RES = { ticker:'', tab:'technicals', btPeriod:'5y', btData:null, techData:null };
 
