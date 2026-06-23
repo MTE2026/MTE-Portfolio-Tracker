@@ -1,0 +1,102 @@
+name: Market Data Update
+
+on:
+  schedule:
+    # Every 15 minutes, 24/7 — market-hours check is done inside the job.
+    # UTC times that cover 8 PM–3 AM IST (IST = UTC+5:30):
+    #   8:00 PM IST = 14:30 UTC  |  3:00 AM IST = 21:30 UTC
+    # Cron runs every 15 min across that window (and a few minutes either side
+    # for clock-skew safety). The job itself re-checks and exits early if the
+    # market is actually closed, so over-firing is harmless.
+    - cron: '0,15,30,45 * * * *'
+
+  # Allow manual trigger from the Actions tab for testing
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force run even outside market hours'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  update-market-data:
+    name: Fetch & Update Market Data
+    runs-on: ubuntu-latest
+    timeout-minutes: 5   # Apps Script endpoint must respond within 5 min
+
+    steps:
+      # ── 1. Market-hours gate ──────────────────────────────────────────────
+      # US market: 9:30 AM – 4:00 PM ET = 14:30 – 21:00 UTC = 20:00 – 03:00 IST
+      # We give a 5-minute buffer on each side (14:25–21:05 UTC) to account for
+      # cron scheduling jitter and the time the job takes to spin up.
+      - name: Check market hours (IST 8 PM – 3 AM)
+        id: market_check
+        run: |
+          HOUR=$(date -u +%-H)
+          MIN=$(date -u +%-M)
+          # Convert to minutes-since-midnight UTC for easy range comparison
+          NOW_MIN=$(( HOUR * 60 + MIN ))
+
+          # Market window in UTC minutes (with 5-min buffer each side):
+          #   Open:  14:25 UTC = 865 min
+          #   Close: 21:05 UTC = 1265 min
+          OPEN_MIN=865
+          CLOSE_MIN=1265
+
+          FORCE="${{ github.event.inputs.force }}"
+
+          if [ "$FORCE" = "true" ]; then
+            echo "MARKET_OPEN=true" >> "$GITHUB_OUTPUT"
+            echo "⚡ Force flag set — skipping market-hours check"
+          elif [ "$NOW_MIN" -ge "$OPEN_MIN" ] && [ "$NOW_MIN" -le "$CLOSE_MIN" ]; then
+            echo "MARKET_OPEN=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Market is OPEN ($(date -u '+%H:%M UTC') = $(TZ='Asia/Kolkata' date '+%H:%M IST'))"
+          else
+            echo "MARKET_OPEN=false" >> "$GITHUB_OUTPUT"
+            echo "🌙 Market is CLOSED ($(date -u '+%H:%M UTC') = $(TZ='Asia/Kolkata' date '+%H:%M IST')) — skipping"
+          fi
+
+      # ── 2. Call Apps Script endpoint ──────────────────────────────────────
+      - name: Trigger updateMarketData on Apps Script
+        if: steps.market_check.outputs.MARKET_OPEN == 'true'
+        env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+        run: |
+          echo "📡 Calling Apps Script at $(date -u '+%H:%M:%S UTC')…"
+
+          RESPONSE=$(curl \
+            --silent \
+            --show-error \
+            --max-time 120 \
+            --retry 2 \
+            --retry-delay 5 \
+            --retry-max-time 60 \
+            --location \
+            --write-out "\n__HTTP_STATUS:%{http_code}" \
+            "${APPS_SCRIPT_URL}?action=updateMarketData")
+
+          # Split body and HTTP status code
+          HTTP_STATUS=$(echo "$RESPONSE" | grep -o '__HTTP_STATUS:[0-9]*' | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | sed 's/__HTTP_STATUS:[0-9]*$//')
+
+          echo "HTTP status: $HTTP_STATUS"
+          echo "Response body:"
+          echo "$BODY" | head -c 2000   # cap log output to first 2000 chars
+
+          # Fail the step if we got a non-2xx response
+          if [ -z "$HTTP_STATUS" ] || [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+            echo "❌ Apps Script returned HTTP $HTTP_STATUS"
+            exit 1
+          fi
+
+          # Check for Apps Script-level error in JSON body
+          if echo "$BODY" | grep -qi '"error"'; then
+            echo "⚠️  Apps Script returned an error in the response body"
+            exit 1
+          fi
+
+          echo "✅ Market data updated successfully"
