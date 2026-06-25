@@ -1,8 +1,3 @@
-<script>
-console.log("INDEX VERSION: LIVE 5");
-window.__INDEX_VERSION__ = "LIVE 5";
-</script>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -357,6 +352,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
     <div class="sb-nav-item active" id="nav-ov" onclick="showOverview()">▦ &nbsp;Portfolio Overview</div>
     <div class="sb-nav-item" id="nav-etf" onclick="showScanner('etf')">📊 &nbsp;ETF Scanner</div>
     <div class="sb-nav-item" id="nav-stk" onclick="showScanner('stock')">📈 &nbsp;Stock Scanner</div>
+    <div id="sb-custom-scanners"></div>
+    <button class="sb-add" onclick="addScannerUI()">+ Add Scanner</button>
   </div>
   <button class="sb-add" onclick="addModelUI()">+ Add New Model</button>
   <div class="sb-section">Benchmarks</div>
@@ -524,6 +521,7 @@ let S = {
   activeView: 'overview',
   activeSubTab: 'monthly',
   activeYear: 2026,
+  customScanners: [], // [{id, name}] — user-defined scanners beyond ETF/Stock
 };
 
 // ━━━ INIT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -560,6 +558,7 @@ function init() {
   S.modelAnchorPrices = JSON.parse(localStorage.getItem('mte_model_anchors') || '{}');
   S.modelAnchorTimestamps = JSON.parse(localStorage.getItem('mte_model_anchor_ts') || '{}');
   S.monthEndPrices = {...SEED_MAY29, ...JSON.parse(localStorage.getItem('mte_mep') || '{}') };
+  S.customScanners = JSON.parse(localStorage.getItem('mte_custom_scanners') || '[]');
   renderSidebar();
   showOverview();
   // Sync returns + locked months from Apps Script (cross-device data)
@@ -584,17 +583,43 @@ async function syncFromServer(){
     const data = await r.json();
     if(!data) return;
 
-    // Merge watchlists from server — independent of returns data presence
-    if(data.etfWatch && Array.isArray(data.etfWatch) && data.etfWatch.length){
-      const local=JSON.parse(localStorage.getItem('mte_etf_watch')||'[]');
-      const merged=[...new Set([...local,...data.etfWatch])];
-      localStorage.setItem('mte_etf_watch',JSON.stringify(merged));
+    // Watchlists — server is source of truth (mirrors models/holdings below).
+    // Previously this merged local+server, so a ticker removed on one device
+    // would get silently re-added by any other device that still had it
+    // cached locally. Now the server's list always wins once it has data;
+    // local-only watchlists get pushed up once on first sync (migration).
+    if(data.etfWatch && Array.isArray(data.etfWatch)){
+      if(data.etfWatch.length || localStorage.getItem('mte_etf_watch_migrated')){
+        localStorage.setItem('mte_etf_watch', JSON.stringify(data.etfWatch));
+      } else {
+        const local=JSON.parse(localStorage.getItem('mte_etf_watch')||'[]');
+        if(local.length) pushWatchlistToServer('etf');
+        localStorage.setItem('mte_etf_watch_migrated','1');
+      }
     }
-    if(data.stkWatch && Array.isArray(data.stkWatch) && data.stkWatch.length){
-      const local=JSON.parse(localStorage.getItem('mte_stk_watch')||'[]');
-      const merged=[...new Set([...local,...data.stkWatch])];
-      localStorage.setItem('mte_stk_watch',JSON.stringify(merged));
+    if(data.stkWatch && Array.isArray(data.stkWatch)){
+      if(data.stkWatch.length || localStorage.getItem('mte_stk_watch_migrated')){
+        localStorage.setItem('mte_stk_watch', JSON.stringify(data.stkWatch));
+      } else {
+        const local=JSON.parse(localStorage.getItem('mte_stk_watch')||'[]');
+        if(local.length) pushWatchlistToServer('stock');
+        localStorage.setItem('mte_stk_watch_migrated','1');
+      }
     }
+    // Custom scanners — server wins once it has any, same pattern as models
+    if(data.customScanners && Array.isArray(data.customScanners) && data.customScanners.length){
+      S.customScanners = data.customScanners;
+      localStorage.setItem('mte_custom_scanners', JSON.stringify(S.customScanners));
+    } else if(S.customScanners.length && !localStorage.getItem('mte_custom_scanners_migrated')){
+      pushCustomScannersToServer();
+      localStorage.setItem('mte_custom_scanners_migrated','1');
+    }
+    if(data.customWatchlists && typeof data.customWatchlists==='object'){
+      Object.entries(data.customWatchlists).forEach(([scannerId, list])=>{
+        if(Array.isArray(list)) localStorage.setItem(watchKeyFor(scannerId), JSON.stringify(list));
+      });
+    }
+    renderSidebar();
     // Merge cost basis independently too — rebalance-driven updates shouldn't depend on returns data
     if(data.costBasis && Object.keys(data.costBasis).length){
       Object.assign(S.costBasis, data.costBasis);
@@ -1188,6 +1213,14 @@ function renderSidebar(){
   document.getElementById('nav-ov').className='sb-nav-item'+(S.activeView==='overview'?' active':'');
   document.getElementById('nav-etf').className='sb-nav-item'+(S.activeView==='scanner'&&SCANNER.type==='etf'?' active':'');
   document.getElementById('nav-stk').className='sb-nav-item'+(S.activeView==='scanner'&&SCANNER.type==='stock'?' active':'');
+  const sbCustom=document.getElementById('sb-custom-scanners');
+  if(sbCustom){
+    sbCustom.innerHTML=getCustomScanners().map(sc=>`
+      <div class="sb-nav-item${S.activeView==='scanner'&&SCANNER.type===sc.id?' active':''}" style="display:flex;align-items:center;justify-content:space-between;" onclick="showScanner('${sc.id}')">
+        <span>🔍 &nbsp;${sc.name.replace(/</g,'&lt;')}</span>
+        <span onclick="event.stopPropagation();deleteScannerUI('${sc.id}')" style="opacity:0.4;font-size:11px;padding:2px 4px;" title="Delete scanner">✕</span>
+      </div>`).join('');
+  }
 }
 
 function showBenchmark(ticker){
@@ -1209,8 +1242,6 @@ function showOverview(){
   document.getElementById('back-btn').style.display='none';
   const delBtn=document.getElementById('delete-model-btn');
   if(delBtn) delBtn.style.display='none';
-  document.getElementById('nav-etf').className='sb-nav-item';
-  document.getElementById('nav-stk').className='sb-nav-item';
   closeSidebar();
   renderSidebar(); renderOverview();
 }
@@ -2341,11 +2372,26 @@ async function fetchDec31Price(ticker){
   return null;
 }
 
+// Built-in scanners ('etf','stock') keep their hardcoded seed lists and watch keys.
+// Custom scanners (any other id) have no seed list — every ticker lives in "watchlist".
+function watchKeyFor(type){
+  if(type==='etf') return 'mte_etf_watch';
+  if(type==='stock') return 'mte_stk_watch';
+  return 'mte_custom_watch_'+type;
+}
 function getScannerList(type){
-  const seed = type==='etf'?SEED_ETFS:SEED_STOCKS;
-  const watchKey = type==='etf'?'mte_etf_watch':'mte_stk_watch';
-  const watch = JSON.parse(localStorage.getItem(watchKey)||'[]');
+  const seed = type==='etf'?SEED_ETFS:type==='stock'?SEED_STOCKS:[];
+  const watch = JSON.parse(localStorage.getItem(watchKeyFor(type))||'[]');
   return { portfolio:[...new Set(seed)], watchlist:[...new Set(watch)] };
+}
+function getCustomScanners(){
+  return S.customScanners||[];
+}
+function scannerLabel(type){
+  if(type==='etf') return 'ETF Scanner';
+  if(type==='stock') return 'Stock Scanner';
+  const sc = getCustomScanners().find(s=>s.id===type);
+  return sc ? sc.name : 'Scanner';
 }
 
 function getSignal(p, prev){
@@ -2424,7 +2470,7 @@ function scannerRow(ticker, type){
   const maStatus=(ma,lbl)=>ma>0?`<span class="ma-bar ${price>ma?'ma-above':'ma-below'}"></span>${lbl}: $${ma.toFixed(0)}`:'—';
   const alertHtml=alerts.length?`<div style="margin-top:4px;">${alerts.map(a=>`<span style="font-size:10px;color:var(--orange);display:block;">${a}</span>`).join('')}</div>`:'';
 
-  const isSeed = (type==='etf'?SEED_ETFS.includes(ticker):SEED_STOCKS.includes(ticker)) && SCANNER.tab!=='watchlist';
+  const isSeed = (type==='etf'?SEED_ETFS.includes(ticker):type==='stock'?SEED_STOCKS.includes(ticker):false) && SCANNER.tab!=='watchlist';
 
   return `<tr>
     <td style="font-weight:700;color:var(--blue);cursor:pointer;" onclick="openResearch('${ticker}')">${ticker}${alerts.length?'<span class="alert-dot"></span>':''}</td>
@@ -2446,20 +2492,20 @@ function cls2(v){ return v>0.005?'pos':v<-0.005?'neg':'neu'; }
 function showScanner(type){
   SCANNER.type=type; SCANNER.tab='portfolio';
   S.activeView='scanner'; S.activeModel=null;
-  document.getElementById('tb-title').textContent=type==='etf'?'ETF Scanner':'Stock Scanner';
+  document.getElementById('tb-title').textContent=scannerLabel(type);
   document.getElementById('tb-sub').textContent='Technical signals & action recommendations';
   document.getElementById('back-btn').style.display='none';
   closeSidebar();
-  // Update sidebar active state
-  document.getElementById('nav-ov').className='sb-nav-item';
-  document.getElementById('nav-etf').className='sb-nav-item'+(type==='etf'?' active':'');
-  document.getElementById('nav-stk').className='sb-nav-item'+(type==='stock'?' active':'');
+  renderSidebar();
   renderScanner();
 }
 
 function renderScanner(){
   const type=SCANNER.type;
+  const isCustom = type!=='etf' && type!=='stock';
   const {portfolio,watchlist}=getScannerList(type);
+  // Custom scanners have no seed list, so always show the watchlist view
+  if(isCustom) SCANNER.tab='watchlist';
   const list=SCANNER.tab==='portfolio'?portfolio:watchlist;
 
   // Fetch live prices for any tickers missing from S.prices (e.g. watchlist tickers after reload)
@@ -2510,18 +2556,16 @@ function renderScanner(){
     <tbody>${list.map(t=>scannerRow(t,type)).join('')}</tbody>
   </table></div>`;
 
-  const watchKey=type==='etf'?'mte_etf_watch':'mte_stk_watch';
-
   document.getElementById('content').innerHTML=`
   <div class="sec-card" style="overflow:hidden;">
-    <div class="scanner-tabs">
+    ${isCustom?'':`<div class="scanner-tabs">
       <button class="scanner-tab ${SCANNER.tab==='portfolio'?'active':''}" onclick="setScannerTab('portfolio')">
         In Portfolio (${portfolio.length})
       </button>
       <button class="scanner-tab ${SCANNER.tab==='watchlist'?'active':''}" onclick="setScannerTab('watchlist')">
         Watchlist (${watchlist.length})
       </button>
-    </div>
+    </div>`}
     <div class="watchlist-add">
       <input class="watchlist-inp" id="scanner-add-inp" placeholder="Add ticker (e.g. MSFT)" 
         onkeydown="if(event.key==='Enter')addScannerTicker('${type}')">
@@ -2540,14 +2584,25 @@ function setScannerTab(tab){
 
 async function pushWatchlistToServer(type){
   try {
-    const etfWatch=JSON.parse(localStorage.getItem('mte_etf_watch')||'[]');
-    const stkWatch=JSON.parse(localStorage.getItem('mte_stk_watch')||'[]');
-    const params=new URLSearchParams({
-      action:'saveWatchlist',
-      etfWatch:JSON.stringify(etfWatch),
-      stkWatch:JSON.stringify(stkWatch)
-    });
-    await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
+    if(type==='etf'||type==='stock'){
+      const etfWatch=JSON.parse(localStorage.getItem('mte_etf_watch')||'[]');
+      const stkWatch=JSON.parse(localStorage.getItem('mte_stk_watch')||'[]');
+      const params=new URLSearchParams({
+        action:'saveWatchlist',
+        etfWatch:JSON.stringify(etfWatch),
+        stkWatch:JSON.stringify(stkWatch)
+      });
+      await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
+    } else {
+      // Custom scanner — push its watchlist under its own key
+      const list=JSON.parse(localStorage.getItem(watchKeyFor(type))||'[]');
+      const params=new URLSearchParams({
+        action:'saveCustomWatchlist',
+        scannerId:type,
+        watch:JSON.stringify(list)
+      });
+      await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
+    }
   } catch(e){ console.error(e); }
 }
 
@@ -2555,7 +2610,7 @@ function addScannerTicker(type){
   const inp=document.getElementById('scanner-add-inp');
   const ticker=(inp.value||'').trim().toUpperCase().replace(/[^A-Z0-9.\-^]/g,'');
   if(!ticker) return;
-  const watchKey=type==='etf'?'mte_etf_watch':'mte_stk_watch';
+  const watchKey=watchKeyFor(type);
   const list=JSON.parse(localStorage.getItem(watchKey)||'[]');
   if(!list.includes(ticker)) list.push(ticker);
   localStorage.setItem(watchKey,JSON.stringify(list));
@@ -2574,12 +2629,49 @@ function addScannerTicker(type){
 }
 
 function removeScannerTicker(ticker,type){
-  const watchKey=type==='etf'?'mte_etf_watch':'mte_stk_watch';
+  const watchKey=watchKeyFor(type);
   let list=JSON.parse(localStorage.getItem(watchKey)||'[]');
   list=list.filter(t=>t!==ticker);
   localStorage.setItem(watchKey,JSON.stringify(list));
   pushWatchlistToServer(type);
   renderScanner();
+}
+
+function addScannerUI(){
+  const name=prompt('Name your new scanner (e.g. "Crypto", "REITs", "Commodities"):');
+  if(!name||!name.trim()) return;
+  const trimmed=name.trim();
+  const id='custom_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+  S.customScanners=S.customScanners||[];
+  S.customScanners.push({id, name:trimmed});
+  localStorage.setItem('mte_custom_scanners', JSON.stringify(S.customScanners));
+  pushCustomScannersToServer();
+  renderSidebar();
+  showScanner(id);
+}
+
+function deleteScannerUI(id){
+  const sc=(S.customScanners||[]).find(s=>s.id===id);
+  if(!sc) return;
+  if(!confirm(`Delete scanner "${sc.name}"? This removes its watchlist for everyone.`)) return;
+  S.customScanners=(S.customScanners||[]).filter(s=>s.id!==id);
+  localStorage.setItem('mte_custom_scanners', JSON.stringify(S.customScanners));
+  localStorage.removeItem(watchKeyFor(id));
+  pushCustomScannersToServer();
+  // Tell server to clear that scanner's watchlist too
+  fetch(`${APPS_SCRIPT_URL}?${new URLSearchParams({action:'saveCustomWatchlist',scannerId:id,watch:'[]',deleted:'1'}).toString()}`).catch(()=>{});
+  if(S.activeView==='scanner'&&SCANNER.type===id) showOverview();
+  else renderSidebar();
+}
+
+async function pushCustomScannersToServer(){
+  try {
+    const params=new URLSearchParams({
+      action:'saveCustomScanners',
+      customScanners: JSON.stringify(S.customScanners||[])
+    });
+    await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
+  } catch(e){ console.error(e); }
 }
 
 init();
