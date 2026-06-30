@@ -1092,9 +1092,6 @@ function currentMonthDrift(name){
 function calcYTD(name,year){
   // Benchmarks use dedicated benchYTD function
   if(year===2026 && BENCHMARKS.find(b=>b.ticker===name)) return benchYTD(name);
-  // Same logic for both direct and blend models:
-  // Jan–May (and locked months): use manually entered returns
-  // Current month: use live drift (for blends, drift is weighted sub-model drift)
   const arr=getMonthArr(name,year);
   let ytd=1;
   if(year===2026){
@@ -1102,7 +1099,28 @@ function calcYTD(name,year){
     for(let i=0;i<curMo;i++){ if(arr[i]!=null) ytd*=(1+arr[i]/100); }
     const curKey=`${name}||${year}-${String(curMo+1).padStart(2,'0')}`;
     const curIsLocked = S.lockedMonths[curKey];
-    const cur = curIsLocked ? (arr[curMo]!=null?arr[curMo]:0) : currentMonthDrift(name);
+    let cur;
+    if(curIsLocked && arr[curMo]!=null){
+      // Direct model with locked current month — use stored value
+      cur = arr[curMo];
+    } else {
+      // Check if this is a blend whose sub-models all have locked current month returns
+      const m=S.models.find(x=>x.name===name);
+      const comps = m && m.isBlend ? (S.blends[name]||[]) : [];
+      const allSubLocked = comps.length>0 && comps.every(c=>{
+        const subKey=`${c.m}||${year}-${String(curMo+1).padStart(2,'0')}`;
+        return S.lockedMonths[subKey] && getMonthArr(c.m,year)[curMo]!=null;
+      });
+      if(allSubLocked){
+        // All sub-models have locked June returns — compute blend from those
+        cur = comps.reduce((acc,c)=>{
+          const subRet=getMonthArr(c.m,year)[curMo];
+          return acc+(c.w/100)*subRet;
+        },0);
+      } else {
+        cur = currentMonthDrift(name);
+      }
+    }
     ytd*=(1+cur/100);
   } else {
     arr.forEach(v=>{ if(v!=null) ytd*=(1+v/100); });
