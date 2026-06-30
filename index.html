@@ -522,6 +522,7 @@ let S = {
   activeSubTab: 'monthly',
   activeYear: 2026,
   customScanners: [], // [{id, name}] — user-defined scanners beyond ETF/Stock
+  marketCommentary: null, // {generatedAt, session, commentary:{modelName:text}} from server cron
 };
 
 // ━━━ INIT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -554,7 +555,14 @@ function init() {
   S.lockedMonths = JSON.parse(localStorage.getItem('mte_locked') || '{}');
   S.yields = JSON.parse(localStorage.getItem('mte_yields') || 'null') || KNOWN_YIELDS;
   S.costBasis = JSON.parse(localStorage.getItem('mte_cost') || '{}');
-  S.modelCategories = JSON.parse(localStorage.getItem('mte_model_cats') || '{}');
+  // Default 'stock' tags for models that hold individual equities rather than
+  // ETFs, so their tickers merge into Stock Scanner instead of ETF Scanner.
+  // Spread order means any saved/server tag for these models overrides this default.
+  const DEFAULT_STOCK_MODEL_CATS = {
+    'All Weather Core':'stock', 'All Weather Momentum':'stock', 'High Beta Tech':'stock',
+    'Nasdaq Select 15':'stock', 'China':'stock', 'Core+ Indexing':'stock'
+  };
+  S.modelCategories = {...DEFAULT_STOCK_MODEL_CATS, ...JSON.parse(localStorage.getItem('mte_model_cats') || '{}')};
   S.modelAnchorPrices = JSON.parse(localStorage.getItem('mte_model_anchors') || '{}');
   S.modelAnchorTimestamps = JSON.parse(localStorage.getItem('mte_model_anchor_ts') || '{}');
   S.monthEndPrices = {...SEED_MAY29, ...JSON.parse(localStorage.getItem('mte_mep') || '{}') };
@@ -618,6 +626,9 @@ async function syncFromServer(){
       Object.entries(data.customWatchlists).forEach(([scannerId, list])=>{
         if(Array.isArray(list)) localStorage.setItem(watchKeyFor(scannerId), JSON.stringify(list));
       });
+    }
+    if(data.marketCommentary && typeof data.marketCommentary==='object'){
+      S.marketCommentary = data.marketCommentary;
     }
     renderSidebar();
     // Merge cost basis independently too — rebalance-driven updates shouldn't depend on returns data
@@ -1272,6 +1283,27 @@ function benchYTD(ticker){
   return 0;
 }
 
+function renderCommentaryCard(){
+  const c = S.marketCommentary;
+  if(!c || !c.commentary || !Object.keys(c.commentary).length) return '';
+  const sessionLabel = c.session==='open' ? 'Market Open' : c.session==='close' ? 'Market Close' : 'Last Check';
+  const when = c.generatedAt ? new Date(c.generatedAt).toLocaleString('en-US',{hour:'numeric',minute:'2-digit',hour12:true,month:'short',day:'numeric'}) : '';
+  const entries = Object.entries(c.commentary);
+  return `<div class="sec-card" style="margin-bottom:14px;border-left:3px solid var(--orange);">
+    <div class="sec-head">
+      <div class="sec-title">⚡ Market Commentary <span style="font-weight:500;color:var(--text-3);font-size:12px;">— ${sessionLabel}</span></div>
+      <div class="sec-hint">${entries.length} model${entries.length===1?'':'s'} flagged · Updated ${when}</div>
+    </div>
+    <div style="padding:4px 20px 18px;">
+      ${entries.map(([model,text])=>`
+        <div style="padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="showModel('${model.replace(/'/g,"\\'")}')">
+          <div style="font-weight:700;font-size:13px;color:var(--navy);margin-bottom:4px;">${model}</div>
+          <div style="font-size:13px;color:var(--text-2);line-height:1.5;">${(text||'').replace(/</g,'&lt;')}</div>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
 function renderOverview(){
   const ytds=S.models.map(m=>calcYTD(m.name,2026)).filter(v=>!isNaN(v));
   const avg=ytds.length?ytds.reduce((a,b)=>a+b,0)/ytds.length:0;
@@ -1353,6 +1385,7 @@ function renderOverview(){
     <div class="sum-card"><div class="sc-label">VIX — S&P 500 Volatility</div><div class="sc-val" style="color:${(vix?.price||0)>25?'var(--red)':(vix?.price||0)>18?'var(--orange)':'var(--green)'};">${vix?.price?vix.price.toFixed(2):'—'}</div><div class="sc-sub">${vix?.price?((vix.price>25?'⚠ Elevated fear':vix.price>18?'⚡ Caution':'✓ Low volatility')+' · Live'):'Fetching…'}</div></div>
     <div class="sum-card"><div class="sc-label">Best YTD 2026</div><div class="sc-val ${cls(calcYTD(best.name,2026))}">${pct(calcYTD(best.name,2026))}</div><div class="sc-sub">${best.name}</div></div>
   </div>
+  ${renderCommentaryCard()}
   <div class="sec-card" style="margin-bottom:14px;">
     <div class="sec-head"><div class="sec-title">Market Benchmarks</div><div class="sec-hint">Pre-market shown before market open</div></div>
     <div class="tbl-scroll"><table class="ov-tbl">
@@ -2379,8 +2412,24 @@ function watchKeyFor(type){
   if(type==='stock') return 'mte_stk_watch';
   return 'mte_custom_watch_'+type;
 }
+// Tickers held by models tagged 'stock' (e.g. Direct Indexing) flow into the
+// Stock Scanner's portfolio view automatically; everything else (default /
+// blended / custom models, which hold ETFs) flows into the ETF Scanner.
+// This merges on top of the static SEED lists rather than replacing them,
+// so existing seed tickers stay even if a model is later removed.
+function modelTickersForCategory(wantStock){
+  const out=new Set();
+  (S.models||[]).forEach(m=>{
+    const isStockModel = S.modelCategories[m.name]==='stock';
+    if(isStockModel!==wantStock) return;
+    (S.holdings[m.name]||[]).forEach(h=>{ if(h.t) out.add(h.t.toUpperCase()); });
+  });
+  return out;
+}
 function getScannerList(type){
-  const seed = type==='etf'?SEED_ETFS:type==='stock'?SEED_STOCKS:[];
+  let seed = type==='etf'?SEED_ETFS:type==='stock'?SEED_STOCKS:[];
+  if(type==='stock') seed=[...new Set([...seed, ...modelTickersForCategory(true)])];
+  if(type==='etf')   seed=[...new Set([...seed, ...modelTickersForCategory(false)])];
   const watch = JSON.parse(localStorage.getItem(watchKeyFor(type))||'[]');
   return { portfolio:[...new Set(seed)], watchlist:[...new Set(watch)] };
 }
