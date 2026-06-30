@@ -752,6 +752,25 @@ async function pushToServer(){
 // Apps Script URL — fetches Yahoo Finance server-side (no CORS issues)
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx7yTD_iD5RGaszjiwc9zicZ0o9hw7W52OEfyGqgt0LJGo-Wdbt5u0tHJKsvi5z5V_Ehg/exec';
 
+// Returns a Date object representing "now" as US Eastern Time wall-clock —
+// i.e. year/month/day/hour reflect what a NYSE trader's calendar says, not
+// the viewer's local device timezone. Critical for month-locking: a colleague
+// in India is ~9.5-14 hours ahead of US markets, so plain `new Date()` can
+// read "next month" hours before the US trading session for the current
+// month has even closed. Always use this (not `new Date()`) for anything
+// that decides "what month/day is it for the market."
+function nowET(){
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone:'America/New_York', year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
+  }).formatToParts(new Date());
+  const get = type => parseInt(parts.find(p=>p.type===type).value, 10);
+  // Construct a Date using these ET-wall-clock values as if they were local —
+  // safe here because we only ever read back .getFullYear()/.getMonth()/etc.
+  // from this object, never compare it against other real Date instances.
+  return new Date(get('year'), get('month')-1, get('day'), get('hour'), get('minute'), get('second'));
+}
+
 function allTickers() {
   const t = new Set(INDICES_WATCH);
   Object.values(S.holdings).forEach(h=>h.forEach(x=>t.add(x.t)));
@@ -771,7 +790,7 @@ function parseASQuote(ticker, q) {
   let weekOpen = price, monthOpen = price;
   if (q.closes && q.timestamps && q.closes.length > 1) {
     const closes = q.closes, ts = q.timestamps;
-    const now = new Date(); const dow = now.getDay();
+    const now = nowET(); const dow = now.getDay();
     const daysToMon = dow===0?6:dow-1;
     const monDate = new Date(now); monDate.setDate(now.getDate()-daysToMon); monDate.setHours(0,0,0,0);
     const monthStart = new Date(now.getFullYear(),now.getMonth(),1);
@@ -902,7 +921,7 @@ async function fetchPriceDirect(ticker) {
     // Previous close — use meta field (most reliable), fallback to second-to-last close
     const prev=meta.chartPreviousClose||meta.previousClose||closes[closes.length-2]||price;
 
-    const now=new Date(); const dow=now.getDay();
+    const now=nowET(); const dow=now.getDay();
     const daysToMon=dow===0?6:dow-1;
     const monDate=new Date(now); monDate.setDate(now.getDate()-daysToMon); monDate.setHours(0,0,0,0);
     const monthStart=new Date(now.getFullYear(),now.getMonth(),1);
@@ -1019,16 +1038,16 @@ function modelCreatedAfter(name, periodStartDate){
   return new Date(anchorTs) > periodStartDate;
 }
 function dRet_model(name){
-  const now=new Date(); const todayStart=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+  const now=nowET(); const todayStart=new Date(now.getFullYear(),now.getMonth(),now.getDate());
   return modelAwareRet(name, dRet, modelCreatedAfter(name, todayStart));
 }
 function wRet_model_anchored(name){
-  const now=new Date(); const dow=now.getDay(); const daysToMon=dow===0?6:dow-1;
+  const now=nowET(); const dow=now.getDay(); const daysToMon=dow===0?6:dow-1;
   const monStart=new Date(now); monStart.setDate(now.getDate()-daysToMon); monStart.setHours(0,0,0,0);
   return modelAwareRet(name, wRet, modelCreatedAfter(name, monStart));
 }
 function mRet_model(name){
-  const now=new Date(); const monthStart=new Date(now.getFullYear(),now.getMonth(),1);
+  const now=nowET(); const monthStart=new Date(now.getFullYear(),now.getMonth(),1);
   return modelAwareRet(name, mRet, modelCreatedAfter(name, monthStart));
 }
 function blendRet(name,fn){
@@ -1079,7 +1098,7 @@ function calcYTD(name,year){
   const arr=getMonthArr(name,year);
   let ytd=1;
   if(year===2026){
-    const now=new Date(); const curMo=now.getMonth();
+    const now=nowET(); const curMo=now.getMonth();
     for(let i=0;i<curMo;i++){ if(arr[i]!=null) ytd*=(1+arr[i]/100); }
     const cur=currentMonthDrift(name);
     ytd*=(1+cur/100);
@@ -1119,15 +1138,15 @@ function driftedW(ticker,modelName){
 
 // ━━━ LOCK MONTH ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function showLockModal(){
-  const now=new Date();
+  const now=nowET();
   const moName=now.toLocaleString('default',{month:'long'});
   document.getElementById('lock-modal-sub').textContent=
-    `This will lock ${moName} ${now.getFullYear()} returns for all models using current live prices. The new month-end prices become the anchor for next month. This cannot be undone.`;
+    `This will lock ${moName} ${now.getFullYear()} returns for all models using current live prices (based on US market time). The new month-end prices become the anchor for next month. This cannot be undone.`;
   document.getElementById('lock-overlay').style.display='flex';
 }
 function executeLockMonth(){
   document.getElementById('lock-overlay').style.display='none';
-  const now=new Date();
+  const now=nowET();
   const year=now.getFullYear(); const mo=now.getMonth();
   const key=`${year}-${String(mo+1).padStart(2,'0')}`;
   const newMEP={...S.monthEndPrices};
@@ -1268,7 +1287,7 @@ const BENCHMARKS = [
 function benchYTD(ticker){
   // Use manually entered returns if available, else May29 price drift
   const arr=getMonthArr(ticker,2026);
-  const now=new Date(); const curMo=now.getMonth();
+  const now=nowET(); const curMo=now.getMonth();
   const hasManual=arr.slice(0,curMo).some(v=>v!=null);
   if(hasManual){
     let ytd=1;
@@ -1498,7 +1517,7 @@ function renderSubTab(){
 function buildMonthly(){
   const name=S.activeModel; const yr=S.activeYear;
   const arr=getMonthArr(name,yr);
-  const now=new Date(); const curMo=now.getMonth(); const curYr=now.getFullYear();
+  const now=nowET(); const curMo=now.getMonth(); const curYr=now.getFullYear();
   const MOS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const cells=MOS.map((mo,i)=>{
     const isCurrentLive=(yr===curYr&&i===curMo);
@@ -2305,7 +2324,7 @@ function renderBacktest(period){
   const now = Date.now()/1000;
   const cutMap = {'1m':30,'3m':90,'ytd':0,'1y':365,'3y':1095,'5y':1825,'10y':3650,'max':99999};
   let cut;
-  if(period==='ytd') cut = new Date(new Date().getFullYear(),0,1).getTime()/1000;
+  if(period==='ytd') cut = new Date(nowET().getFullYear(),0,1).getTime()/1000;
   else cut = now - cutMap[period]*86400;
   // Filter
   const ftc=[], fsc=[];
