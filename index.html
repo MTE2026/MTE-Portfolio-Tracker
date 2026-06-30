@@ -1100,7 +1100,9 @@ function calcYTD(name,year){
   if(year===2026){
     const now=nowET(); const curMo=now.getMonth();
     for(let i=0;i<curMo;i++){ if(arr[i]!=null) ytd*=(1+arr[i]/100); }
-    const cur=currentMonthDrift(name);
+    const curKey=`${name}||${year}-${String(curMo+1).padStart(2,'0')}`;
+    const curIsLocked = S.lockedMonths[curKey];
+    const cur = curIsLocked ? (arr[curMo]!=null?arr[curMo]:0) : currentMonthDrift(name);
     ytd*=(1+cur/100);
   } else {
     arr.forEach(v=>{ if(v!=null) ytd*=(1+v/100); });
@@ -1525,12 +1527,16 @@ function buildMonthly(){
     const isLocked=S.lockedMonths[`${name}||${yr}-${String(i+1).padStart(2,'0')}`];
     const v=arr[i];
     let dispVal='', cls2='', ro=true;
-    if(isCurrentLive){
+    if(isLocked){
+      // Locked always wins, even if it's also the calendar-current month —
+      // otherwise locking "this month" while still inside it (now possible
+      // since lock correctly uses US market time) silently shows live drift
+      // instead of the value you just locked in.
+      dispVal=v!=null?v:''; cls2=v!=null?(v>0?'vpos':'vneg')+' vlocked':'vlocked'; ro=true;
+    } else if(isCurrentLive){
       dispVal=pct(currentMonthDrift(name)); cls2='vlive'; ro=true;
     } else if(isFuture){
       dispVal='—'; cls2=''; ro=true;
-    } else if(isLocked){
-      dispVal=v!=null?v:''; cls2=v!=null?(v>0?'vpos':'vneg')+' vlocked':'vlocked'; ro=true;
     } else if(v!=null){
       dispVal=v; cls2=v>0?'vpos':v<0?'vneg':''; ro=!S.editMode;
     } else {
