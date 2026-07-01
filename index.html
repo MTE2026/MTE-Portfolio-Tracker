@@ -383,6 +383,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans
       <button class="btn btn-outline" onclick="refreshPrices()">↻ Refresh</button>
       <button class="btn btn-orange mobile-hide" onclick="showLockModal()" title="Lock current month's returns">🔒 Lock Month</button>
       <button class="btn btn-outline mobile-hide" id="sync-btn" onclick="syncHistoricalToServer()" title="Push all historical returns to server for cross-device sync" style="font-size:11px;">⬆ Sync Data</button>
+      <button class="btn btn-outline mobile-hide" id="deploy-btn" onclick="deployFrontend()" title="Deploy latest frontend to GitHub Pages" style="font-size:11px;">🚀 Deploy</button>
       <button class="btn btn-outline" id="delete-model-btn" style="display:none;color:#c0392b;border-color:#c0392b;" onclick="deleteModel(S.activeModel)" title="Delete this model">🗑 Delete</button>
       <button class="btn btn-navy" id="edit-btn" onclick="toggleEdit()">Edit</button>
     </div>
@@ -641,8 +642,11 @@ async function syncFromServer(){
     const serverHasModels = data.models && Array.isArray(data.models) && data.models.length > 0;
     const serverHasHoldings = data.holdings && typeof data.holdings==='object' && Object.keys(data.holdings).length > 0;
     if(serverHasModels){
-      // Server wins — replace local state and cache
-      S.models = data.models;
+      // Deduplicate by name — server can accumulate duplicates if multiple
+      // devices push simultaneously. Last occurrence of each name wins.
+      const seen={};
+      data.models.forEach(m=>{ seen[m.name]=m; });
+      S.models = Object.values(seen);
       localStorage.setItem('mte_models', JSON.stringify(S.models));
     } else if(S.models.length > 0 && !localStorage.getItem('mte_models_migrated')){
       // One-time migration: server is empty, push local data up
@@ -1226,9 +1230,11 @@ async function executeLockMonth(){
     } catch(e){ console.error('getMonthPrices batch failed',e); }
     await new Promise(r=>setTimeout(r,200));
   }
-  console.log('Month prices fetched:', monthPrices);
+  console.log('Month-end prices fetched:', monthPrices);
 
   // Step 4: Compute weighted return per direct model
+  // Performance = (June 30 close / prior month-end anchor) - 1
+  // Anchor priority: S.monthEndPrices (last locked month-end) → S.may29 (seed)
   const computed={};
   S.models.forEach(m=>{
     if(m.isBlend) return;
@@ -1236,13 +1242,11 @@ async function executeLockMonth(){
     if(!h.length) return;
     let ret=0, covered=0;
     h.forEach(x=>{
-      const mp=monthPrices[x.t];
-      if(mp&&mp.open>0&&mp.close>0){
-        ret+=(x.w/100)*((mp.close-mp.open)/mp.open*100);
-        covered+=x.w;
-      } else if(S.prices[x.t]&&S.prices[x.t].monthlyReturn!=null){
-        // Fallback to Yahoo MTD if month price fetch failed for this ticker
-        ret+=(x.w/100)*S.prices[x.t].monthlyReturn;
+      const endPx = monthPrices[x.t]&&monthPrices[x.t].close ? monthPrices[x.t].close
+                  : (S.prices[x.t]&&S.prices[x.t].price ? S.prices[x.t].price : null);
+      const anchor = S.monthEndPrices[x.t] || S.may29[x.t];
+      if(endPx&&anchor&&anchor>0){
+        ret+=(x.w/100)*((endPx-anchor)/anchor*100);
         covered+=x.w;
       }
     });
@@ -1283,6 +1287,29 @@ async function executeLockMonth(){
   await pushMonthToServer(lockYear, actualMo);
 
   alert(`✓ ${moName} ${lockYear} locked for ${Object.keys(computed).length} models.\nNext month tracking starts automatically.`);
+}
+
+async function deployFrontend(){
+  const btn=document.getElementById('deploy-btn');
+  btn.textContent='⏳ Deploying…'; btn.disabled=true;
+  try {
+    const r = await fetch(`${APPS_SCRIPT_URL}?action=deployStored`);
+    const d = await r.json();
+    if(d.success){
+      btn.textContent='✓ Deployed!';
+      alert('✓ Deployed to GitHub. Hard refresh in ~30 seconds.');
+      setTimeout(()=>{ btn.textContent='🚀 Deploy'; btn.disabled=false; }, 4000);
+    } else if(d.error==='NO_CONTENT'){
+      alert('No update staged yet — Claude will provide a staging script with the next update.');
+      btn.textContent='🚀 Deploy'; btn.disabled=false;
+    } else {
+      alert('Deploy failed: '+d.error);
+      btn.textContent='🚀 Deploy'; btn.disabled=false;
+    }
+  } catch(e){
+    alert('Deploy error: '+e.message);
+    btn.textContent='🚀 Deploy'; btn.disabled=false;
+  }
 }
 
 async function syncHistoricalToServer(){
