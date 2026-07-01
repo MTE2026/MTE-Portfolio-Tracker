@@ -1167,32 +1167,122 @@ function driftedW(ticker,modelName){
 // ━━━ LOCK MONTH ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function showLockModal(){
   const now=nowET();
-  const moName=now.toLocaleString('default',{month:'long'});
+  const mo=now.getMonth();
+  const year=now.getFullYear();
+  const lockMo=(now.getDate()===1&&now.getHours()<18)?mo-1:mo;
+  const lockYear=(lockMo<0)?year-1:year;
+  const actualMo=(lockMo<0)?11:lockMo;
+  const moName=new Date(lockYear,actualMo,1).toLocaleString('default',{month:'long'});
   document.getElementById('lock-modal-sub').textContent=
-    `This will lock ${moName} ${now.getFullYear()} returns for all models using current live prices (based on US market time). The new month-end prices become the anchor for next month. This cannot be undone.`;
+    `This will lock ${moName} ${lockYear} returns for all models by fetching actual month-open and month-close prices from Yahoo Finance. This cannot be undone.`;
   document.getElementById('lock-overlay').style.display='flex';
 }
-function executeLockMonth(){
+async function executeLockMonth(){
   document.getElementById('lock-overlay').style.display='none';
   const now=nowET();
+  // Lock the PREVIOUS month — always lock the month that just ended,
+  // not the current one. If it's July 1, we're locking June.
+  // If called mid-month (e.g. user locks early), lock current month.
+  // Standard usage: click at month end, so mo = current month in ET.
   const year=now.getFullYear(); const mo=now.getMonth();
-  const key=`${year}-${String(mo+1).padStart(2,'0')}`;
-  const newMEP={...S.monthEndPrices};
-  allTickers().forEach(t=>{ if(S.prices[t]&&S.prices[t].price) newMEP[t]=S.prices[t].price; });
-  S.monthEndPrices=newMEP;
+  // Determine which month we're locking: if it's the 1st of the month
+  // and before 6pm ET (market hasn't been open long), lock previous month.
+  const lockMo = (now.getDate()===1 && now.getHours()<18) ? mo-1 : mo;
+  const lockYear = (lockMo<0) ? year-1 : year;
+  const actualMo = (lockMo<0) ? 11 : lockMo;
+  const key=`${lockYear}-${String(actualMo+1).padStart(2,'0')}`;
+  const moName = new Date(lockYear, actualMo, 1).toLocaleString('default',{month:'long'});
+
+  // Step 1: Collect all unique tickers across all direct models
+  const tickerSet=new Set();
+  S.models.forEach(m=>{ if(!m.isBlend)(S.holdings[m.name]||[]).forEach(h=>tickerSet.add(h.t)); });
+  const tickers=[...tickerSet];
+
+  // Step 2: Compute month timestamps
+  // Month start = first day of lockMo, Month end = last day of lockMo
+  const mStart = Math.floor(new Date(lockYear, actualMo, 1).getTime()/1000);
+  const mEnd   = Math.floor(new Date(lockYear, actualMo+1, 0, 23, 59, 59).getTime()/1000);
+
+  // Step 3: Fetch actual month open/close prices via Apps Script (no CORS, no cache dependency)
+  const btn=document.getElementById('lock-btn')||document.querySelector('[onclick*="showLockModal"]');
+  if(btn){ btn.textContent='⏳ Fetching…'; btn.disabled=true; }
+  
+  const monthPrices={};
+  const batchSize=20;
+  for(let i=0;i<tickers.length;i+=batchSize){
+    const batch=tickers.slice(i,i+batchSize);
+    try {
+      const params=new URLSearchParams({
+        action:'getMonthPrices',
+        tickers:batch.join(','),
+        period1:mStart,
+        period2:mEnd
+      });
+      const r=await fetch(`${APPS_SCRIPT_URL}?${params.toString()}`);
+      if(r.ok){
+        const d=await r.json();
+        Object.assign(monthPrices,d);
+      }
+    } catch(e){ console.error('getMonthPrices batch failed',e); }
+    await new Promise(r=>setTimeout(r,200));
+  }
+  console.log('Month prices fetched:', monthPrices);
+
+  // Step 4: Compute weighted return per direct model
+  const computed={};
   S.models.forEach(m=>{
     if(m.isBlend) return;
-    const ret=currentMonthDrift(m.name);
-    if(!S.returns[m.name]) S.returns[m.name]={};
-    if(!S.returns[m.name][year]) S.returns[m.name][year]=Array(12).fill(null);
-    S.returns[m.name][year][mo]=parseFloat(ret.toFixed(4));
-    S.lockedMonths[`${m.name}||${key}`]=true;
+    const h=S.holdings[m.name]||[];
+    if(!h.length) return;
+    let ret=0, covered=0;
+    h.forEach(x=>{
+      const mp=monthPrices[x.t];
+      if(mp&&mp.open>0&&mp.close>0){
+        ret+=(x.w/100)*((mp.close-mp.open)/mp.open*100);
+        covered+=x.w;
+      } else if(S.prices[x.t]&&S.prices[x.t].monthlyReturn!=null){
+        // Fallback to Yahoo MTD if month price fetch failed for this ticker
+        ret+=(x.w/100)*S.prices[x.t].monthlyReturn;
+        covered+=x.w;
+      }
+    });
+    if(covered>0) computed[m.name]=parseFloat(ret.toFixed(4));
   });
-  save();
-  rerender();
-  // Push to server after lock — small payload per model
-  pushMonthToServer(year, mo);
-  alert(`✓ ${now.toLocaleString('default',{month:'long'})} locked for all models. Next month tracking starts automatically.`);
+
+  // Step 5: Handle blend models
+  S.models.forEach(m=>{
+    if(!m.isBlend) return;
+    const comps=S.blends[m.name]||[];
+    if(!comps.length) return;
+    let ret=0,hasAll=true;
+    comps.forEach(c=>{ if(computed[c.m]!=null) ret+=(c.w/100)*computed[c.m]; else hasAll=false; });
+    if(hasAll) computed[m.name]=parseFloat(ret.toFixed(4));
+  });
+
+  console.log('Computed returns:', computed);
+
+  // Step 6: Write into S.returns and mark locked
+  Object.keys(computed).forEach(name=>{
+    if(!S.returns[name]) S.returns[name]={};
+    if(!S.returns[name][lockYear]) S.returns[name][lockYear]=Array(12).fill(null);
+    S.returns[name][lockYear][actualMo]=computed[name];
+    S.lockedMonths[`${name}||${key}`]=true;
+  });
+
+  // Step 7: Update month-end prices from fetched data (use month close prices)
+  const newMEP={...S.monthEndPrices};
+  Object.keys(monthPrices).forEach(t=>{ if(monthPrices[t]&&monthPrices[t].close) newMEP[t]=monthPrices[t].close; });
+  // Also pick up any current prices for tickers not in month fetch
+  allTickers().forEach(t=>{ if(!newMEP[t]&&S.prices[t]&&S.prices[t].price) newMEP[t]=S.prices[t].price; });
+  S.monthEndPrices=newMEP;
+
+  save(); rerender();
+  if(btn){ btn.textContent='🔒 Lock Month'; btn.disabled=false; }
+
+  // Step 8: Push to server — one model at a time (no payload limit issue)
+  await pushMonthToServer(lockYear, actualMo);
+
+  alert(`✓ ${moName} ${lockYear} locked for ${Object.keys(computed).length} models.\nNext month tracking starts automatically.`);
 }
 
 async function syncHistoricalToServer(){
