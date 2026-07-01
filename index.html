@@ -1074,8 +1074,7 @@ function currentMonthDrift(name){
   }
   const h=S.holdings[name]||[]; if(!h.length) return 0;
   const modelAnchors = S.modelAnchorPrices?.[name];
-  // Try anchor-based drift first (more accurate for YTD) — prefer per-model
-  // anchor (set at model creation) over the global last-lock-month anchor.
+  // Try anchor-based drift first (most accurate — uses locked month-end price as base)
   let anchorDrift=0, hasAnchor=false;
   h.forEach(x=>{
     const anchor=(modelAnchors && modelAnchors[x.t]) || S.monthEndPrices[x.t]||S.may29[x.t];
@@ -1083,7 +1082,16 @@ function currentMonthDrift(name){
     if(anchor&&p&&p.price&&anchor>0){ anchorDrift+=(x.w/100)*((p.price-anchor)/anchor*100); hasAnchor=true; }
   });
   if(hasAnchor) return anchorDrift;
-  // Fallback: use live MTD return from Yahoo Finance prices (works on all devices)
+  // Fallback 1: use Yahoo's monthlyReturn field directly — this is the MTD
+  // return as computed by Yahoo Finance on the server side, which stays correct
+  // across month boundaries regardless of local timezone issues with monthOpen.
+  let yahooMTD=0, hasYahoo=false;
+  h.forEach(x=>{
+    const p=S.prices[x.t];
+    if(p&&p.monthlyReturn!=null){ yahooMTD+=(x.w/100)*p.monthlyReturn; hasYahoo=true; }
+  });
+  if(hasYahoo) return yahooMTD;
+  // Fallback 2: compute from monthOpen (least reliable at month boundaries)
   let mtdDrift=0;
   h.forEach(x=>{ mtdDrift+=(x.w/100)*mRet(x.t); });
   return mtdDrift;
